@@ -1,11 +1,90 @@
 import numpy as np
 import plotly.express as px
-from scipy.interpolate import NearestNDInterpolator
+from scipy.interpolate import NearestNDInterpolator, griddata
 import matplotlib.pyplot as plt
 import seaborn as sns
 import geopandas
 import pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+
+
 pd.options.mode.chained_assignment = None
+
+
+def plot_on_spherical_globe(data_df, color_column="adose", 
+                           title=None, 
+                           cmap="Spectral_r", 
+                           colorbar_label=None,
+                           central_latitude=0,
+                           central_longitude=0):
+    """
+    Plot data on a 3D spherical globe using Cartopy.
+    
+    Parameters:
+    -----------
+    data_df : pandas.DataFrame
+        DataFrame containing latitude, longitude, and data values
+    color_column : str
+        Column name in data_df to use for coloring points
+    marker_size : int
+        Size of markers
+    title : str
+        Plot title
+    cmap : str
+        Matplotlib colormap name
+    colorbar_label : str
+        Label for the colorbar
+    central_latitude : float
+        Central latitude of the plot
+    central_longitude : float
+        Central longitude of the plot
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The figure object
+    """
+    
+    # Create figure with orthographic projection (3D globe view)
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(1, 1, 1, projection=ccrs.Orthographic(central_longitude, central_latitude))
+    
+    # Add coastlines and features
+    ax.coastlines(linewidth=0.5)
+    ax.gridlines(linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    
+    # Create a heatmap using pcolormesh
+    # First, we need to reshape the data into a grid
+    
+    # Create a regular grid for the heatmap
+    # lon_grid = np.linspace(data_df["longitude"].min(), data_df["longitude"].max(), 100)
+    # lat_grid = np.linspace(data_df["latitude"].min(), data_df["latitude"].max(), 100)
+    lon_mesh, lat_mesh = np.meshgrid(data_df["longitude"].unique(), data_df["latitude"].unique())
+    
+    # Interpolate the data onto the grid
+    values = data_df[color_column].values
+    grid_values = griddata((data_df["longitude"], data_df["latitude"]), values, 
+                           (lon_mesh, lat_mesh), method='linear', fill_value=np.nan)
+    
+    # Plot the heatmap
+    scatter = ax.pcolormesh(lon_mesh, lat_mesh, grid_values, 
+                           transform=ccrs.PlateCarree(),
+                           cmap=cmap, 
+                           alpha=0.8,
+                           shading='auto')
+    
+    # Add colorbar
+    if colorbar_label is None:
+        colorbar_label = color_column
+    cbar = plt.colorbar(scatter, shrink=0.7, pad=0.1)
+    cbar.set_label(colorbar_label)
+    
+    # Set title
+    if title:
+        plt.title(title)
+    
+    return fig
 
 def plot_dose_map_contours(dose_map_to_plot,levels=3,**kwargs):
 

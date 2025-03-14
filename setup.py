@@ -27,7 +27,7 @@ setup(
     package_data={"AniMAIRE":[
                                 "anisotropic_MAIRE_engine/data/*.csv"
                                          ]},
-    version='1.2.4',
+    version='1.2.5',
     description='Python library for running the anisotropic version of MAIRE+',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -57,7 +57,9 @@ setup(
                         'kpindex >= 2.0.0',
                         'ipywidgets >= 8.1.5',
                         'dask >= 2022.0.0',
-                        'pyarrow >= 12.0.0'],
+                        'pyarrow >= 12.0.0',
+                        'matplotlib >= 3.7.2',
+                        'cartopy >= 0.22.0'],
     #install_requires,
     setup_requires=['pytest-runner','wheel'],
     tests_require=['pytest'],
