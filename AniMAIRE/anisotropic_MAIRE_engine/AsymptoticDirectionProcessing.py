@@ -9,8 +9,7 @@ import ParticleRigidityCalculationTools as PRCT
 from joblib import Memory
 import tqdm
 tqdm.tqdm.pandas()
-from pandarallel import pandarallel
-pandarallel.initialize(progress_bar=True)
+
 from spacepy.coordinates import Coords as spaceCoords
 from spacepy.time import Ticktock as spaceTicktock
 import numba
@@ -103,6 +102,8 @@ def convertAsymptoticDirectionsToPitchAngle(dataframeToFillFrom: pd.DataFrame, I
         The Series with pitch angles.
     """
     print("acquiring pitch angles...")
+    from pandarallel import pandarallel
+    pandarallel.initialize(progress_bar=True)
     pitch_angle_list = get_apply_method(dataframeToFillFrom)(lambda dataframe_row: get_pitch_angle_for_DF_analytic(IMFlatitude, IMFlongitude, dataframe_row["Lat"], dataframe_row["Long"]), axis=1)
 
     return pitch_angle_list
@@ -152,6 +153,10 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     - pd.DataFrame
         The DataFrame with weighting factors.
     """
+
+    from pandarallel import pandarallel
+    pandarallel.initialize(progress_bar=True)
+    
     momentaDist = particle_dist.momentum_distribution
     new_asymptotic_direction_DF = asymptotic_direction_DF.copy()
 

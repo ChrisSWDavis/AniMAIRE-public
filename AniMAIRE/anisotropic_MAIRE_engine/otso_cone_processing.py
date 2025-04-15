@@ -6,6 +6,10 @@ from typing import Optional
 import OTSO
 import logging
 
+# NOTE: This file is now deprecated but could be reused in the future.
+# It contains functionality for processing OTSO cone output into asymptotic direction dataframes.
+# The new functionality is in otso_planet_processing.py and uses the OTSO.planet() function.
+
 def convert_to_asymp_df(cone_output: list[pd.DataFrame, pd.DataFrame]) -> pd.DataFrame:
     """
     Convert the OTSO.cone() output to a DataFrame with asymptotic directions.

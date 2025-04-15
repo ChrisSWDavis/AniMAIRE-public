@@ -9,7 +9,7 @@ from typing import Optional
 from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools
 from .AsymptoticDirectionProcessing import generate_asymp_dir_DF
-from .otso_cone_processing import create_and_convert_full_cone
+from .otso_planet_processing import create_and_convert_full_planet
 import os
 
 # Initialize tqdm for progress bars
@@ -32,7 +32,7 @@ class generalEngineInstance:
                  list_of_altitudes_km: list[float], 
                  Kp_index: int, 
                  date_and_time: dt.datetime,
-                 use_OTSOpy: bool,
+                 use_OTSOpy: bool = True,
                  reference_latitude: float = 0.0,
                  reference_longitude: float = 45.0,
                  array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
@@ -125,7 +125,7 @@ class generalEngineInstance:
         - **magneto_kwargs: additional keyword arguments for Magnetocosmics.
         """
         if self.use_OTSOpy:
-            asymptotic_directions_function = create_and_convert_full_cone
+            asymptotic_directions_function = create_and_convert_full_planet
         else:
             asymptotic_directions_function = AsympDirsTools.get_magcos_asymp_dirs
 
