@@ -8,23 +8,25 @@ import logging
 import ParticleRigidityCalculationTools as PRCT
 from joblib import Memory
 import psutil
-# Set up caching for Magnetocosmics run data
+
+# Set up caching for OTSO calculations
 OTSOcachedir = 'cachedOTSOData'
 OTSOmemory = Memory(OTSOcachedir, verbose=0)
 
 def convert_planet_df_to_asymp_format(planet_df):
     """
-    Convert the OTSO planet dataframe to the same format as the MagCos asymptotic directions dataframe.
+    Convert the OTSO planet dataframe to the same format as the asymptotic directions dataframe.
     
     Parameters:
     -----------
     planet_df : tuple
-        The output from OTSO.planet() with asymptotic directions
+        The output from OTSO.planet() with asymptotic directions, containing a DataFrame as its first element
         
     Returns:
     --------
     pd.DataFrame
-        A dataframe in the same format as magcos_asymp_dirs_DF
+        A dataframe with columns: initialLatitude, initialLongitude, Energy, Lat, Long, Filter, Rigidity
+        sorted by initialLatitude and initialLongitude
     """
     import pandas as pd
     
@@ -56,7 +58,7 @@ def convert_planet_df_to_asymp_format(planet_df):
                 new_row = {
                     'initialLatitude': lat,
                     'initialLongitude': lon,
-                    'Energy': energy_value,  # This is actually energy, will need conversion if rigidity is needed
+                    'Energy': energy_value,  # Energy in GeV
                     'Lat': float(asymp_lat),
                     'Long': float(asymp_long),
                     'Filter': int(filter_val)
@@ -65,27 +67,24 @@ def convert_planet_df_to_asymp_format(planet_df):
     
     # Create a dataframe from the rows
     result_df = pd.DataFrame(rows)
-    result_df["Rigidity"] = PRCT.convertParticleEnergyToRigidity(result_df["Energy"]*1000.0,particleMassAU = 1,particleChargeAU = 1)
     
-    # Convert energy to rigidity if needed
-    # Uncomment and modify the following lines if conversion is needed
-    # import ParticleRigidityCalculationTools as PRCT
-    # result_df['Rigidity'] = PRCT.convertParticleEnergyToRigidity(
-    #     result_df['Rigidity'] * 1000.0,  # Convert back to MeV
-    #     particleMassAU=1,
-    #     particleChargeAU=1
-    # )
+    # Convert energy (GeV) to rigidity (GV)
+    result_df["Rigidity"] = PRCT.convertParticleEnergyToRigidity(
+        result_df["Energy"]*1000.0,  # Convert GeV to MeV
+        particleMassAU=1,
+        particleChargeAU=1
+    )
     
     return result_df.sort_values(by=["initialLatitude","initialLongitude"]).reset_index(drop=True)
 
 def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                             kpIndex:int,
                             dateAndTime:dt.datetime,
+                            corenum=int, 
                             array_of_zeniths_and_azimuths=[[0.0,0.0]],
                             max_rigidity=1010, 
                             min_rigidity=20, 
                             rigidity_step=16, 
-                            corenum=7, 
                             **kwargs):
     """
     Create asymptotic directions using OTSO.planet() and convert to a DataFrame format.
@@ -93,15 +92,13 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
     Parameters:
     -----------
     array_of_lats_and_longs : list[list[float,float]]
-        List of [latitude, longitude] coordinates to use
-        If None, a default world map grid will be generated with lat range (-90, 90),
-        long range (0, 360), and steps of 5 degrees
+        List of [latitude, longitude] coordinates to calculate asymptotic directions for
     kpIndex : int
         Kp index value for the magnetic field model
     dateAndTime : dt.datetime
         Date and time for the calculation
-    array_of_zeniths_and_azimuths : list, optional
-        List of [zenith, azimuth] pairs, default [[0.0, 0.0]]
+    array_of_zeniths_and_azimuths : list[list[float,float]], optional
+        List of [zenith, azimuth] pairs for viewing directions, default [[0.0, 0.0]]
     max_rigidity : float, optional
         Maximum rigidity value in GV, default 1010
     min_rigidity : float, optional
@@ -109,7 +106,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
     rigidity_step : float, optional
         Step size for rigidity in GV, default 16
     corenum : int, optional
-        Number of cores to use for calculation, default 7
+        Number of CPU cores to use for calculation, default 7
     **kwargs : dict
         Additional parameters to pass to OTSO.planet()
         
@@ -117,7 +114,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
     --------
     pd.DataFrame
         DataFrame containing the asymptotic directions with columns:
-        initialLatitude, initialLongitude, Rigidity, Lat, Long, Filter, zenith, azimuth
+        initialLatitude, initialLongitude, Energy, Rigidity, Lat, Long, Filter, zenith, azimuth
     """
     
     # Create rigidity levels for asymptotic directions
@@ -127,6 +124,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         rigidity_levels_GV.append(current_rigidity)
         current_rigidity -= rigidity_step
 
+    # Convert rigidity (GV) to energy (GeV) for OTSO
     energy_levels_MeV = PRCT.convertParticleRigidityToEnergy(rigidity_levels_GV)/1000.0
     
     all_results = []
@@ -174,40 +172,84 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             cache:bool,
                             full_output=False,
                             array_of_zeniths_and_azimuths=[[0.0,0.0]],
-                            highestMaxRigValue = 1010,
-                            maxRigValue = 20,
-                            minRigValue = 0.1,
-                            nIncrements_high = 60,
-                            nIncrements_low = 200,
+                            highestMaxRigValue=1010,
+                            maxRigValue=20,
+                            minRigValue=0.1,
+                            nIncrements_high=60,
+                            nIncrements_low=200,
                             corenum=psutil.cpu_count(logical=False) - 2, 
-                           **kwargs):
+                            **kwargs):
+    """
+    Calculate asymptotic directions for a wide range of rigidities by combining high and low rigidity ranges.
+    
+    This function splits the calculation into two parts: high rigidity range (highestMaxRigValue to maxRigValue)
+    and low rigidity range (maxRigValue to minRigValue), with different step sizes for each range.
+    
+    Parameters:
+    -----------
+    array_of_lats_and_longs : list[list[float,float]]
+        List of [latitude, longitude] coordinates to calculate asymptotic directions for
+    KpIndex : int
+        Kp index value for the magnetic field model
+    dateAndTime : dt.datetime
+        Date and time for the calculation
+    cache : bool
+        Whether to use cached results for OTSO calculations
+    full_output : bool, optional
+        Flag for additional output information, default False (currently not used)
+    array_of_zeniths_and_azimuths : list[list[float,float]], optional
+        List of [zenith, azimuth] pairs for viewing directions, default [[0.0, 0.0]]
+    highestMaxRigValue : float, optional
+        Maximum rigidity value in GV for high rigidity range, default 1010
+    maxRigValue : float, optional
+        Minimum rigidity value in GV for high rigidity range and maximum for low rigidity range, default 20
+    minRigValue : float, optional
+        Minimum rigidity value in GV for low rigidity range, default 0.1
+    nIncrements_high : int, optional
+        Number of rigidity increments for high rigidity range, default 60
+    nIncrements_low : int, optional
+        Number of rigidity increments for low rigidity range, default 200
+    corenum : int, optional
+        Number of CPU cores to use for calculation, default is number of physical cores minus 2
+    **kwargs : dict
+        Additional parameters to pass to OTSO.planet()
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Combined DataFrame containing asymptotic directions for both high and low rigidity ranges
+    """
     
     print(f"Using {corenum} cores for OTSO.planet calculation")
     
+    # Calculate step sizes for high and low rigidity ranges
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)
     low_rigidity_step = (maxRigValue - minRigValue) / (nIncrements_low - 1)
 
-    # Function to call with or without caching based on cache parameter
-    create_convert_func = create_and_convert_planet if cache else create_and_convert_planet
+    # Use cached or non-cached function based on cache parameter
+    create_convert_func = OTSOmemory.cache(create_and_convert_planet) if cache else create_and_convert_planet
     
+    # Calculate high rigidity range asymptotic directions
     high_rigidity_planet_results = create_convert_func(array_of_lats_and_longs, 
                                                       KpIndex, 
                                                       dateAndTime,
+                                                      corenum,
                                                       array_of_zeniths_and_azimuths, 
                                                       highestMaxRigValue, 
                                                       maxRigValue, 
-                                                      high_rigidity_step, 
-                                                      corenum, 
+                                                      high_rigidity_step,
                                                       **kwargs)
     
+    # Calculate low rigidity range asymptotic directions
     low_rigidity_planet_results = create_convert_func(array_of_lats_and_longs, 
                                                      KpIndex, 
                                                      dateAndTime,
+                                                     corenum,
                                                      array_of_zeniths_and_azimuths, 
                                                      maxRigValue - low_rigidity_step, 
                                                      minRigValue, 
-                                                     low_rigidity_step, 
-                                                     corenum, 
+                                                     low_rigidity_step,
                                                      **kwargs)
 
-    return pd.concat([high_rigidity_planet_results, low_rigidity_planet_results],ignore_index=True) 
+    # Combine results from both rigidity ranges
+    return pd.concat([high_rigidity_planet_results, low_rigidity_planet_results], ignore_index=True) 

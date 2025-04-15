@@ -57,8 +57,10 @@ setup(
                         'ipywidgets >= 8.1.5',
                         'dask >= 2022.0.0',
                         'pyarrow >= 12.0.0',
-                        'OTSO >= 0.1.0'],
+                        'OTSO >= 0.1.0',
+                        'matplotlib >= 3.10.1',
+                        'psutil >= 7.0.0'],
     #install_requires,
     setup_requires=['pytest-runner','wheel'],
-    tests_require=['pytest'],
+    tests_require=['pytest','pytest-order'],
 )
