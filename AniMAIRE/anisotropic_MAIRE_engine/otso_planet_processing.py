@@ -120,11 +120,13 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
     """
     
     # Create rigidity levels for asymptotic directions
-    rigidity_levels = []
+    rigidity_levels_GV = []
     current_rigidity = max_rigidity
     while current_rigidity >= min_rigidity:
-        rigidity_levels.append(current_rigidity)
+        rigidity_levels_GV.append(current_rigidity)
         current_rigidity -= rigidity_step
+
+    energy_levels_MeV = PRCT.convertParticleRigidityToEnergy(rigidity_levels_GV)/1000.0
     
     all_results = []
     
@@ -137,7 +139,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
             array_of_lats_and_longs=array_of_lats_and_longs,
             corenum=corenum,
             asymptotic="YES",
-            asymlevels=rigidity_levels,
+            asymlevels=energy_levels_MeV,
             kp=kpIndex,
             year=dateAndTime.year,
             month=dateAndTime.month,
@@ -183,7 +185,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
     low_rigidity_step = (maxRigValue - minRigValue) / (nIncrements_low - 1)
 
     # Function to call with or without caching based on cache parameter
-    create_convert_func = OTSOmemory.cache(create_and_convert_planet) if cache else create_and_convert_planet
+    create_convert_func = create_and_convert_planet if cache else create_and_convert_planet
     
     high_rigidity_planet_results = create_convert_func(array_of_lats_and_longs, 
                                                       KpIndex, 
@@ -199,10 +201,10 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                                                      KpIndex, 
                                                      dateAndTime,
                                                      array_of_zeniths_and_azimuths, 
-                                                     maxRigValue, 
-                                                     minRigValue + low_rigidity_step, 
+                                                     maxRigValue - low_rigidity_step, 
+                                                     minRigValue, 
                                                      low_rigidity_step, 
                                                      corenum, 
                                                      **kwargs)
 
-    return pd.concat([high_rigidity_planet_results, low_rigidity_planet_results]) 
+    return pd.concat([high_rigidity_planet_results, low_rigidity_planet_results],ignore_index=True) 
