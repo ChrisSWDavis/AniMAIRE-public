@@ -5,7 +5,7 @@ import datetime as dt
 from typing import Optional
 import OTSO
 import logging
-
+import psutil
 # NOTE: This file is now deprecated but could be reused in the future.
 # It contains functionality for processing OTSO cone output into asymptotic direction dataframes.
 # The new functionality is in otso_planet_processing.py and uses the OTSO.planet() function.
@@ -212,7 +212,7 @@ def create_and_convert_full_cone(array_of_lats_and_longs:list[list[float,float]]
                             minRigValue = 0.1,
                             nIncrements_high = 60,
                             nIncrements_low = 200,
-                            corenum=7, 
+                            corenum=psutil.cpu_count(logical=False) - 2, 
                            **kwargs):
     
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)

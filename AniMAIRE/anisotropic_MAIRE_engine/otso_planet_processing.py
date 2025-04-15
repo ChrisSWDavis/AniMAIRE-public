@@ -7,6 +7,7 @@ import OTSO
 import logging
 import ParticleRigidityCalculationTools as PRCT
 from joblib import Memory
+import psutil
 # Set up caching for Magnetocosmics run data
 OTSOcachedir = 'cachedOTSOData'
 OTSOmemory = Memory(OTSOcachedir, verbose=0)
@@ -178,8 +179,10 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             minRigValue = 0.1,
                             nIncrements_high = 60,
                             nIncrements_low = 200,
-                            corenum=7, 
+                            corenum=psutil.cpu_count(logical=False) - 2, 
                            **kwargs):
+    
+    print(f"Using {corenum} cores for OTSO.planet calculation")
     
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)
     low_rigidity_step = (maxRigValue - minRigValue) / (nIncrements_low - 1)
