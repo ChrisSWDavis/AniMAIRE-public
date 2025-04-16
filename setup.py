@@ -62,5 +62,5 @@ setup(
                         'psutil >= 7.0.0'],
     #install_requires,
     setup_requires=['pytest-runner','wheel'],
-    tests_require=['pytest','pytest-order'],
+    tests_require=['pytest'],
 )

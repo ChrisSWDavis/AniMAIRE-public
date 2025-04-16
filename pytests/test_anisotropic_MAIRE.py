@@ -117,7 +117,6 @@ def test_Common_spec_max_asymp_dir():
 #                         date_and_time=dt.datetime(year=2000,month=7,day=14,hour=10,minute=45,second=0))
 #     assert result is not None
 
-@pytest.mark.order(1)
 def test_run_from_spectra_two_locations():
     expected_output_doses = [
         [-28.3, -92.7, 0.0, 1566042.081461501, 1584829.7906373749, 2533601.13864571, 20720.5264863163, 12792.83414833093, 8617.837255319431, 4.391961356198295e-09, 0.00043919613561982954],
@@ -175,7 +174,6 @@ def test_run_from_spectra_two_locations():
 #                                             altitudes_in_km=np.append(np.array(range(0,13)) * 0.3048,11.28))
 #     assert result is not None
 
-@pytest.mark.order(2)
 def test_Common_spec_max_asymp_dir():
     array_of_lats_and_longs = np.array([[65.0,25.0],[-35.0,78.0]])
     array_of_zeniths_and_azimuths = np.array([(i,j) for i in np.linspace(0,20,5) for j in np.linspace(0,360,5)])
@@ -189,7 +187,6 @@ def test_Common_spec_max_asymp_dir():
                                             cache_asymptotic_directions=False,)
     assert outputted_dose is not None
 
-@pytest.mark.order(3)
 def test_DLR_spec_no_tzinfo():
     # expected_dlr_spec = [
     #     [-28.3, -92.7, 0.0, 0.058988868823598634, 0.06080286996669734, 0.09344092993619182, 0.004531869853011256, 0.002768310853422817, 0.0019206239073194524, 3.26731705969241e-16, 3.2673170596924094e-11],
@@ -262,7 +259,6 @@ def test_DLR_spec_no_tzinfo():
     
     assert np.allclose(np.array(result), np.array(expected_dlr_spec))
 
-@pytest.mark.order(4)
 def test_DLR_spec():
     # expected_dlr_spec = [
     #     [-28.3, -92.7, 0.0, 0.058988868823598634, 0.06080286996669734, 0.09344092993619182, 0.004531869853011256, 0.002768310853422817, 0.0019206239073194524, 3.26731705969241e-16, 3.2673170596924094e-11],
@@ -356,7 +352,6 @@ def test_isotropic_dose_rates():
 #         Kp_index=3,
 #         date_and_time=dt.datetime(2006, 12, 13, 3, 0))
 
-@pytest.mark.order(5)
 def test_isotropic_dose_rates():
     # expected_isotropic_dose_rates = [
     #     [65.0, 25.0, 0.0000, 0.010434, 0.012526, 0.010010, 0.004431, 0.002726, 0.001826, 2.725682e-16, 2.725682e-11],
@@ -402,7 +397,6 @@ def test_isotropic_dose_rates():
 
     assert np.allclose(test_isotropic_dose_rates.values, expected_isotropic_dose_rates)
 
-@pytest.mark.order(6)
 def test_anisotropic_dose_rates():
     # expected_anisotropic_dose_rates = [
     #     [-90.0, 0.0, 0.0000, 1.976895e-07, 2.027961e-07, 3.222401e-07, 1.286575e-08, 7.877480e-09, 5.401425e-09, 7.877480e-22, 7.877480e-17],
@@ -435,7 +429,6 @@ def test_anisotropic_dose_rates():
     assert np.allclose(rounded_actual_values[-1], expected_anisotropic_dose_rates[-1])
 
 # Test running AniMAIRE using a precomputed OTSO asymptotic direction file
-@pytest.mark.order(7)
 def test_run_from_OTSO_asymp_file(tmp_path):
     import os
     import pandas as pd
