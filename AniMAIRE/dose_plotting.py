@@ -180,8 +180,8 @@ def plot_on_spherical_globe(heatmap_DF_to_Plot,
                            palette="Spectral_r", 
                            hue_range=None,
                            legend_label=r"Effective dose ($\mu Sv / hr$)",
-                           central_latitude=0,
-                           central_longitude=0):
+                           central_latitude=40.0,
+                           central_longitude=0.0):
     """
     Plot data on a 3D spherical globe using Cartopy.
     
