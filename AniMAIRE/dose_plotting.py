@@ -117,7 +117,7 @@ def create_single_dose_map_plot_plt(heatmap_DF_to_Plot,
         heatmap_DF_to_Plot = heatmap_DF_to_Plot.query(f"`altitude (km)` == {heatmap_DF_to_Plot['altitude (km)'].max()}")
 
     if hue_range is None:
-        hue_range = (0,heatmap_DF_to_Plot["edose"].max())
+        hue_range = (0,heatmap_DF_to_Plot[dose_type].max())
 
     ############################ creating background world map and dose image
     currentFigure = plt.gcf()
@@ -239,6 +239,8 @@ def plot_on_spherical_globe(heatmap_DF_to_Plot,
                            alpha=0.8,
                            shading='auto')
 
+    if hue_range is None:
+        hue_range = (0,heatmap_DF_to_Plot[dose_type].max())
     norm = plt.Normalize(hue_range[0], hue_range[1])
     sm = plt.cm.ScalarMappable(cmap=palette, norm=norm)
     sm.set_array([])
