@@ -1,24 +1,48 @@
 from scipy.interpolate import interp1d
 import pandas as pd
 import scipy
-import pickle as pkl
 import numpy as np
 import datetime
-
+import matplotlib.pyplot as plt
 from CosRayModifiedISO import CosRayModifiedISO
 
 print("WARNING: currently unknown whether the reported spectral weighting factor should be in terms of energy or rigidity")
+
+# Define picklable callable classes for function composition
+class SummedFunction:
+    """Callable class that combines two functions by addition."""
+    def __init__(self, func1, func2):
+        self.func1 = func1
+        self.func2 = func2
+        
+    def __call__(self, *args, **kwargs):
+        return self.func1(*args, **kwargs) + self.func2(*args, **kwargs)
+        
+class ScaledFunction:
+    """Callable class that scales a function by a factor."""
+    def __init__(self, func, scale):
+        self.func = func
+        self.scale = scale
+        
+    def __call__(self, *args, **kwargs):
+        return self.scale * self.func(*args, **kwargs)
 
 class rigiditySpectrum():
     """
     Base class for rigidity spectra.
     """
 
-    def __init__(self):
+    def __init__(self, rigiditySpec: callable = None):
         """
         Initialize the rigidity spectrum.
         """
-        pass
+        self.rigiditySpec = rigiditySpec or self.evaluate
+
+    def evaluate(self, x: float) -> float:
+        """
+        Default evaluate method, should be overridden by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement evaluate method")
 
     def __call__(self, x: float) -> float:
         """
@@ -47,15 +71,48 @@ class rigiditySpectrum():
             The sum of the two rigidity spectra.
         """
         summed_spectrum = rigiditySpectrum()
-        summed_spectrum.rigiditySpec = lambda x: self.rigiditySpec(x) + right.rigiditySpec(x)
+        summed_spectrum.rigiditySpec = SummedFunction(self.rigiditySpec, right.rigiditySpec)
         return summed_spectrum
+    
+    def plot(self, title=None, ax=None, min_rigidity=0.1, max_rigidity=20, **kwargs):
+        """
+        Plot the spectrum for this spectrum object.
+        
+        Parameters:
+        -----------
+        title : str, optional
+            Title for the plot. If None, a default title is used.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, a new figure is created.
+        min_rigidity : float, optional
+            Minimum rigidity in GV for spectrum plot (default: 0.1)
+        max_rigidity : float, optional
+            Maximum rigidity in GV for spectrum plot (default: 20)
+        
+        Returns:
+        --------
+        matplotlib.axes.Axes
+            The axes containing the plot
+        """
+        
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 5))
+        
+        rigidity_range = np.logspace(np.log10(min_rigidity), np.log10(max_rigidity), 100)  # GV
+        flux_values = [self.rigiditySpec(r) for r in rigidity_range]
+        ax.loglog(rigidity_range, flux_values, **kwargs)
+        ax.set_xlabel('Rigidity (GV)')
+        ax.set_ylabel('Flux (particles/m²/sr/s/GV)')
+        ax.set_title('Rigidity Spectrum' if title is None else title)
+        ax.grid(True, which='both', linestyle='--', alpha=0.7)
+        ax.set_xlim(min_rigidity, max_rigidity)
+    
+        return ax
 
 class powerLawSpectrum(rigiditySpectrum):
     """
     Power law rigidity spectrum.
     """
-
-    rigiditySpec = lambda self, x: self.normalisationFactor * (x ** self.spectralIndex)
 
     def __init__(self, normalisationFactor: float, spectralIndex: float):
         """
@@ -67,8 +124,15 @@ class powerLawSpectrum(rigiditySpectrum):
         - spectralIndex: float
             The spectral index.
         """
+        super().__init__(None)
         self.normalisationFactor = normalisationFactor
         self.spectralIndex = spectralIndex
+    
+    def evaluate(self, x: float) -> float:
+        """
+        Evaluate the power law spectrum.
+        """
+        return self.normalisationFactor * (x ** self.spectralIndex)
 
 class interpolatedInputFileSpectrum(rigiditySpectrum):
     """
@@ -84,7 +148,8 @@ class interpolatedInputFileSpectrum(rigiditySpectrum):
             The path to the input file.
         """
         self.inputFilename = inputFileName
-        self.rigiditySpec = self.readSpecFromCSV(self.inputFilename)
+        interp_func = self.readSpecFromCSV(self.inputFilename)
+        super().__init__(interp_func)
 
     def readSpecFromCSV(self, inputFileName: str) -> callable:
         """
@@ -140,22 +205,18 @@ class DLRmodelSpectrum(rigiditySpectrum):
         if OULUcountRateInSeconds is not None:
             self._generatedSpectrumDF =CosRayModifiedISO.getSpectrumUsingOULUcountRate(OULUcountRatePerSecond=OULUcountRateInSeconds, atomicNumber=atomicNumber)
 
-        self.rigiditySpec = interp1d(x=self._generatedSpectrumDF["Rigidity (GV/n)"],
-                                     y=self._generatedSpectrumDF["d_Flux / d_R (cm-2 s-1 sr-1 (GV/n)-1)"],
-                                     kind="linear",
-                                     bounds_error=False,
-                                     fill_value=(0.0, 0.0))
-
-        with open("DLRsavedSpectrum.pkl", "wb") as DLRspecFile:
-            pkl.dump(self, DLRspecFile)
+        interp_func = interp1d(x=self._generatedSpectrumDF["Rigidity (GV/n)"],
+                             y=self._generatedSpectrumDF["d_Flux / d_R (cm-2 s-1 sr-1 (GV/n)-1)"],
+                             kind="linear",
+                             bounds_error=False,
+                             fill_value=(0.0, 0.0))
+        
+        super().__init__(interp_func)
 
 class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
     """
     Common modified power law rigidity spectrum.
     """
-
-    specIndexModification = lambda self, P: self.deltaGamma * (P - 1)
-    rigiditySpec = lambda self, P: self.J0 * self.step_function(P, self.lowerLimit, self.upperLimit) * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
 
     def __init__(self, J0: float, gamma: float, deltaGamma: float, lowerLimit: float = -np.inf, upperLimit: float = np.inf):
         """
@@ -173,16 +234,19 @@ class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
         - upperLimit: float, optional
             The upper limit for the rigidity.
         """
+        super().__init__(None)
         self.lowerLimit = lowerLimit
         self.upperLimit = upperLimit
-
         self.J0 = J0  # m-2 s-1 sr-1 GV-1
         self.gamma = gamma
         self.deltaGamma = deltaGamma
 
-        with open("CommonsavedSpectrum.pkl", "wb") as CommonspecFile:
-            pkl.dump(self, CommonspecFile)
-
+    def specIndexModification(self, P: float) -> float:
+        """
+        Calculate the spectral index modification.
+        """
+        return self.deltaGamma * (P - 1)
+    
     def step_function(self, rigidity: float, lowerLimit: float, upperLimit: float) -> float:
         """
         Step function for the rigidity spectrum.
@@ -203,16 +267,17 @@ class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
             return 1.0
         else:
             return 0.0
+    
+    def evaluate(self, P: float) -> float:
+        """
+        Evaluate the common modified power law spectrum.
+        """
+        return self.J0 * self.step_function(P, self.lowerLimit, self.upperLimit) * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
 
 class CommonModifiedPowerLawSpectrumSplit(rigiditySpectrum):
     """
     Common modified power law rigidity spectrum with split spectral index modification.
     """
-
-    specIndexModification_high = lambda self, P: self.deltaGamma * (P - 1)
-    specIndexModification_low = lambda self, P: self.deltaGamma * (P)
-    specIndexModification = lambda self, P: self.specIndexModification_high(P) if P > 1.0 else self.specIndexModification_low(P)
-    rigiditySpec = lambda self, P: self.J0 * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
 
     def __init__(self, J0: float, gamma: float, deltaGamma: float):
         """
@@ -226,9 +291,31 @@ class CommonModifiedPowerLawSpectrumSplit(rigiditySpectrum):
         - deltaGamma: float
             The modification factor for the spectral index.
         """
+        super().__init__(None)
         self.J0 = J0  # m-2 s-1 sr-1 GV-1
         self.gamma = gamma
         self.deltaGamma = deltaGamma
-
-        with open("CommonsavedSpectrum.pkl", "wb") as CommonspecFile:
-            pkl.dump(self, CommonspecFile)
+    
+    def specIndexModification_high(self, P: float) -> float:
+        """
+        Calculate the spectral index modification for high rigidity.
+        """
+        return self.deltaGamma * (P - 1)
+    
+    def specIndexModification_low(self, P: float) -> float:
+        """
+        Calculate the spectral index modification for low rigidity.
+        """
+        return self.deltaGamma * (P)
+    
+    def specIndexModification(self, P: float) -> float:
+        """
+        Calculate the spectral index modification.
+        """
+        return self.specIndexModification_high(P) if P > 1.0 else self.specIndexModification_low(P)
+    
+    def evaluate(self, P: float) -> float:
+        """
+        Evaluate the common modified power law spectrum with split spectral index modification.
+        """
+        return self.J0 * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2

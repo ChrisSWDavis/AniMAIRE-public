@@ -5,8 +5,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import geopandas
 import pandas as pd
-import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
+from matplotlib import animation
+from IPython.display import HTML
+import os
+import imageio
 
 
 pd.options.mode.chained_assignment = None
@@ -86,7 +89,7 @@ def plot_on_spherical_globe(data_df, color_column="adose",
     
     return fig
 
-def plot_dose_map_contours(dose_map_to_plot,levels=3,**kwargs):
+def plot_dose_map_contours(dose_map_to_plot, dose_type="edose", levels=3, **kwargs):
 
     dose_map_to_plot_sorted = dose_map_to_plot.sort_values(by=["longitudeTranslated","latitude"])
 
@@ -94,7 +97,7 @@ def plot_dose_map_contours(dose_map_to_plot,levels=3,**kwargs):
             dose_map_to_plot_sorted["latitude"].unique())
 
     interp = NearestNDInterpolator(list(zip(dose_map_to_plot_sorted["longitudeTranslated"], dose_map_to_plot_sorted["latitude"])),
-                               dose_map_to_plot_sorted["edose"])
+                               dose_map_to_plot_sorted[dose_type])
 
     contours = plt.contour(contour_longs,contour_lats,interp(contour_longs, contour_lats),
             levels=levels,linestyles="dashed",colors="black",zorder=1000,**kwargs)
@@ -125,9 +128,58 @@ def create_single_dose_map_plot_plt(heatmap_DF_to_Plot,
     currentFigure.set_figheight(10)
     currentFigure.set_figwidth(10)
 
+    # Store original dose type request
+    original_dose_type = dose_type
+    # Set default legend label if not provided
+    effective_legend_label = legend_label
+
+    # Conditionally calculate SEU/SEL rates and update dose_type for plotting
+    if dose_type == 'SEU':
+        if 'SEU' in heatmap_DF_to_Plot.columns:
+            calculated_col_name = "SEU (Upsets/hr/Gb)"
+            heatmap_DF_to_Plot[calculated_col_name] = heatmap_DF_to_Plot["SEU"] * (60.0 * 60.0) * 1e9
+            dose_type = calculated_col_name # Use the calculated column for plotting
+            # Update legend label if it was the default
+            if legend_label == r"Effective dose ($\mu Sv / hr$)":
+                 effective_legend_label = "SEU (Upsets/hr/Gb)"
+        else:
+            print(f"Warning: dose_type='SEU' requested, but 'SEU' column not found in DataFrame.")
+            # Fallback or error handling needed? For now, proceed with original dose_type if it exists
+            if original_dose_type not in heatmap_DF_to_Plot.columns:
+                 print(f"Error: Neither 'SEU' nor original dose_type '{original_dose_type}' found.")
+                 return None, None # Cannot plot
+            dose_type = original_dose_type # Revert to original if SEU base column missing
+            
+    elif dose_type == 'SEL':
+        if 'SEL' in heatmap_DF_to_Plot.columns:
+            calculated_col_name = "SEL (Latch-ups/hr/device)"
+            heatmap_DF_to_Plot[calculated_col_name] = heatmap_DF_to_Plot["SEL"] * (60.0 * 60.0)
+            dose_type = calculated_col_name # Use the calculated column for plotting
+             # Update legend label if it was the default
+            if legend_label == r"Effective dose ($\mu Sv / hr$)":
+                 effective_legend_label = "SEL (Latch-ups/hr/device)"
+        else:
+            print(f"Warning: dose_type='SEL' requested, but 'SEL' column not found in DataFrame.")
+            if original_dose_type not in heatmap_DF_to_Plot.columns:
+                 print(f"Error: Neither 'SEL' nor original dose_type '{original_dose_type}' found.")
+                 return None, None # Cannot plot
+            dose_type = original_dose_type # Revert to original if SEL base column missing
+
+    # Check if the final dose_type column exists before proceeding
+    if dose_type not in heatmap_DF_to_Plot.columns:
+         print(f"Error: Final dose_type column '{dose_type}' not found in DataFrame. Cannot plot.")
+         return None, None
+
+    # Update hue_range based on the final dose_type if it wasn't provided
+    if hue_range is None:
+        # Calculate max safely, handling potential NaNs or empty slices
+        max_val = heatmap_DF_to_Plot[dose_type].max()
+        hue_range = (0, max_val if pd.notna(max_val) else 1) # Default max to 1 if max is NaN/None
+
     #heatmap_DF_to_Plot = pd.read_csv(file_path_to_read, delimiter=',')
-    heatmap_DF_to_Plot["SEU (Upsets/hr/Gb)"] = heatmap_DF_to_Plot["SEU"] * (60.0 * 60.0) * 1e9
-    heatmap_DF_to_Plot["SEL (Latch-ups/hr/device)"] = heatmap_DF_to_Plot["SEL"] * (60.0 * 60.0)
+    # REMOVED Unconditional calculation:
+    # heatmap_DF_to_Plot["SEU (Upsets/hr/Gb)"] = heatmap_DF_to_Plot["SEU"] * (60.0 * 60.0) * 1e9
+    # heatmap_DF_to_Plot["SEL (Latch-ups/hr/device)"] = heatmap_DF_to_Plot["SEL"] * (60.0 * 60.0)
     if plot_longitude_east is False:
         heatmap_DF_to_Plot["longitudeTranslated"] = heatmap_DF_to_Plot["longitude"].apply(lambda x:x-360.0 if x > 180.0 else x)
     else:
@@ -148,7 +200,8 @@ def create_single_dose_map_plot_plt(heatmap_DF_to_Plot,
         # Remove the legend and add a colorbar
         #scatterPlotAxis.get_legend().remove()
         #colorbar = scatterPlotAxis.figure.colorbar(sm,label=legend_label,shrink=0.4)
-        colorbar = scatterPlotAxis.figure.colorbar(sm,label=legend_label,orientation="horizontal",ax=plt.gca())
+        # Use the potentially updated legend label
+        colorbar = scatterPlotAxis.figure.colorbar(sm,label=effective_legend_label,orientation="horizontal",ax=plt.gca()) 
     else:
         colorbar = None
 
@@ -316,3 +369,226 @@ def create_single_dose_map_plotly(DF_to_use,
     doseRateMap.show()
 
     return doseRateMap
+
+def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=False):
+    """
+    Create animations for GLE event data.
+    
+    Parameters:
+    -----------
+    results : dict
+        Dictionary containing timestamps as keys and dataframes as values.
+    altitude : float, optional
+        The altitude in km for which to create the animation. Default is 12.192 km.
+    save_gif : bool, optional
+        Whether to save the animation as a GIF file. Default is False.
+    save_mp4 : bool, optional
+        Whether to save the animation as an MP4 file. Default is False.
+    """
+    
+    # Find the maximum dose value across all timestamps
+    max_dose = 0
+    for timestamp, df in results.items():
+        data_df = df.query(f'`altitude (km)` == {altitude}')
+        if not data_df.empty and 'edose' in data_df.columns:
+            current_max = data_df['edose'].max()
+            max_dose = max(max_dose, current_max)
+    
+    # Round up to the nearest 5 or 10 for a cleaner colorbar
+    if max_dose > 100:
+        max_dose = np.ceil(max_dose / 10) * 10
+    else:
+        max_dose = np.ceil(max_dose / 5) * 5
+    
+    # Create figure for the animation
+    fig = plt.figure(figsize=(10, 6))
+    
+    # Get sorted timestamps for consistent animation order
+    timestamps = sorted(results.keys())
+    
+    # Function to update the animation frame
+    def update(timestamp_idx):
+        plt.clf()
+        timestamp = timestamps[timestamp_idx]
+        df = results[timestamp]
+        
+        # Extract data for the specified altitude
+        data_df = df.query(f'`altitude (km)` == {altitude}')
+        
+        from AniMAIRE.dose_plotting import plot_dose_map
+        outputted_figure = plot_dose_map(data_df,
+                            plot_title=f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
+                            #colorbar_label=f"Effective Dose Rate (μSv/hr)",
+                            #central_latitude=50.0,
+                            hue_range=(0, max_dose))
+        
+        return [plt.gca()]
+
+    # Create the animation - make sure to import animation from matplotlib
+    ani = animation.FuncAnimation(fig, update, frames=len(timestamps), 
+                                 interval=500, blit=False)
+
+    # Save the animation to HTML5 video
+    video = ani.to_jshtml()
+    
+    if save_gif:
+        # Save the animation to an animated GIF file
+        gif_filename = f"GLE_animation_{altitude}km.gif"
+        
+        # Create a temporary directory if it doesn't exist
+        if not os.path.exists('animation_temp'):
+            os.makedirs('animation_temp')
+        
+        # Save individual frames for GIF creation
+        frames = []
+        for i in range(len(timestamps)):
+            # Update the figure for this frame
+            update(i)
+            
+            # Save the frame
+            frame_filename = f'animation_temp/frame_{i:03d}.png'
+            plt.savefig(frame_filename, dpi=100, bbox_inches='tight')
+            frames.append(frame_filename)
+        
+        # Use imageio to create the GIF
+        with imageio.get_writer(gif_filename, mode='I', duration=0.5) as writer:
+            for frame_filename in frames:
+                image = imageio.imread(frame_filename)
+                writer.append_data(image)
+        
+        print(f"Animation saved as {gif_filename}")
+        
+        # Clean up temporary files
+        for frame_filename in frames:
+            os.remove(frame_filename)
+
+    if save_mp4:
+        # Save the animation as an MP4 video
+        mp4_filename = f"GLE_animation_{altitude}km.mp4"
+        
+        # Set up the writer with desired parameters
+        Writer = animation.writers['ffmpeg']
+        writer = Writer(fps=2, metadata=dict(artist='AniMAIRE'), bitrate=1800)
+        
+        try:
+            # Save the animation to MP4
+            ani.save(mp4_filename, writer=writer)
+            print(f"Animation saved as {mp4_filename}")
+        except Exception as e:
+            print(f"Error saving MP4: {e}")
+            print("If ffmpeg is not installed, you may need to install it with: pip install ffmpeg-python")
+
+    # Display the animation
+    print(f"GLE Animation at {altitude} km (max dose: {max_dose} μSv/hr):")
+    return HTML(video)  # Return HTML object instead of displaying it directly
+
+def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp4=False):
+    """
+    Create animations for GLE event data.
+    
+    Parameters:
+    -----------
+    results : dict
+        Dictionary containing timestamps as keys and dataframes as values.
+    altitude : float, optional
+        The altitude in km for which to create the animation. Default is 12.192 km.
+    save_gif : bool, optional
+        Whether to save the animation as a GIF file. Default is False.
+    save_mp4 : bool, optional
+        Whether to save the animation as an MP4 file. Default is False.
+    """
+    
+    # Find the maximum dose value across all timestamps
+    max_dose = 0
+    for timestamp, df in results.items():
+        data_df = df.query(f'`altitude (km)` == {altitude}')
+        if not data_df.empty and 'edose' in data_df.columns:
+            current_max = data_df['edose'].max()
+            max_dose = max(max_dose, current_max)
+    
+    # Round up to the nearest 5 or 10 for a cleaner colorbar
+    if max_dose > 100:
+        max_dose = np.ceil(max_dose / 10) * 10
+    else:
+        max_dose = np.ceil(max_dose / 5) * 5
+    
+    # Create figure for the animation
+    fig = plt.figure(figsize=(10, 6))
+    
+    # Get sorted timestamps for consistent animation order
+    timestamps = sorted(results.keys())
+    
+    # Function to update the animation frame
+    def update(timestamp_idx):
+        plt.clf()
+        timestamp = timestamps[timestamp_idx]
+        df = results[timestamp]
+        
+        # Extract data for the specified altitude
+        data_df = df.query(f'`altitude (km)` == {altitude}')
+        
+        outputted_figure = plot_on_spherical_globe(data_df,
+                            plot_title=f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
+                            legend_label=f"Effective Dose Rate (μSv/hr)",
+                            central_latitude=50.0,
+                            hue_range=(0, max_dose))
+        
+        return [plt.gca()]
+
+    # Create the animation
+    ani = animation.FuncAnimation(fig, update, frames=len(timestamps), 
+                                 interval=500, blit=False)
+
+    # Save the animation to HTML5 video
+    video = ani.to_jshtml()
+    
+    if save_gif:
+        # Save the animation to an animated GIF file
+        gif_filename = f"GLE_animation_{altitude}km.gif"
+        
+        # Create a temporary directory if it doesn't exist
+        if not os.path.exists('animation_temp'):
+            os.makedirs('animation_temp')
+        
+        # Save individual frames for GIF creation
+        frames = []
+        for i in range(len(timestamps)):
+            # Update the figure for this frame
+            update(i)
+            
+            # Save the frame
+            frame_filename = f'animation_temp/frame_{i:03d}.png'
+            plt.savefig(frame_filename, dpi=100, bbox_inches='tight')
+            frames.append(frame_filename)
+        
+        # Use imageio to create the GIF
+        with imageio.get_writer(gif_filename, mode='I', duration=0.5) as writer:
+            for frame_filename in frames:
+                image = imageio.imread(frame_filename)
+                writer.append_data(image)
+        
+        print(f"Animation saved as {gif_filename}")
+        
+        # Clean up temporary files
+        for frame_filename in frames:
+            os.remove(frame_filename)
+
+    if save_mp4:
+        # Save the animation as an MP4 video
+        mp4_filename = f"GLE_animation_{altitude}km_globe.mp4"
+        
+        # Set up the writer with desired parameters
+        Writer = animation.writers['ffmpeg']
+        writer = Writer(fps=2, metadata=dict(artist='AniMAIRE'), bitrate=1800)
+        
+        try:
+            # Save the animation to MP4
+            ani.save(mp4_filename, writer=writer)
+            print(f"Animation saved as {mp4_filename}")
+        except Exception as e:
+            print(f"Error saving MP4: {e}")
+            print("If ffmpeg is not installed, you may need to install it with: pip install ffmpeg-python")
+
+    # Display the animation
+    print(f"GLE Animation at {altitude} km (max dose: {max_dose} μSv/hr):")
+    return HTML(video)  # Return HTML object instead of displaying it directly

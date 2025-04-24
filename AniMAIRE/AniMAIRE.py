@@ -1,14 +1,13 @@
 import numpy as np
 import datetime as dt
 import spaceweather as sw
-import pandas as pd
 from typing import Callable, List, Optional
 
 from .utils import get_correctly_formatted_particle_dist_list, get_kp_index, validate_altitudes
 from .anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import DLRmodelSpectrum, CommonModifiedPowerLawSpectrum, CommonModifiedPowerLawSpectrumSplit
 from .anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import gaussianBeeckPitchAngleDistribution, isotropicPitchAngleDistribution, gaussianPitchAngleDistribution
 from .anisotropic_MAIRE_engine.generalEngineInstance import generalEngineInstance, default_array_of_lats_and_longs
-
+from .DoseRateFrame import DoseRateFrame
 import logging
 
 def run_from_spectra(
@@ -29,7 +28,7 @@ def run_from_spectra(
         asymp_dir_file: Optional[str] = None,
         record_full_output: bool = False,
         **mag_cos_kwargs,
-) -> pd.DataFrame:
+) -> DoseRateFrame:
     """
     Perform a run to calculate dose rates across Earth's atmosphere based on proton, alpha particle + heavier ions, or proton + alpha particle + heavier ions spectra.
 
@@ -68,8 +67,8 @@ def run_from_spectra(
         Additional arguments to pass to AsympDirsCalculator.
 
     Returns:
-    - output_dose_rate_DF: DataFrame
-        DataFrame containing the calculated dose rates.
+    - output_dose_rate_DF: DoseRateFrame
+        DoseRateFrame containing the calculated dose rates and metadata.
     """
 
     # New check: if an asymp_dir_file is provided, do not allow other asymptotic direction parameters.
@@ -117,9 +116,26 @@ def run_from_spectra(
                                           generate_NM_count_rates=generate_NM_count_rates,
                                           asymp_dir_file=asymp_dir_file)
     
-    output_dose_rate_DF = engine_to_run.getAsymptoticDirsAndRun(use_default_9_zeniths_azimuths, record_full_output=record_full_output,  **mag_cos_kwargs)
+    output_dose_rate_DF_data = engine_to_run.getAsymptoticDirsAndRun(use_default_9_zeniths_azimuths, record_full_output=record_full_output,  **mag_cos_kwargs)
 
     print("Success!")
+
+    # Capture run parameters excluding potentially large or internal variables
+    run_parameters = locals().copy()
+    # Remove variables that are not direct inputs or are modified later/internal
+    run_parameters.pop('mag_cos_kwargs', None) 
+    run_parameters.pop('engine_to_run', None)
+    run_parameters.pop('output_dose_rate_DF', None)
+    run_parameters.pop('list_of_particle_distributions', None) # Added below specifically
+    run_parameters.update(mag_cos_kwargs) # Add back mag_cos_kwargs flattened
+
+    # Create DoseRateFrame instance
+    output_dose_rate_DF = DoseRateFrame(
+        data=output_dose_rate_DF_data,
+        timestamp=date_and_time,
+        particle_distributions=list_of_particle_distributions,
+        run_parameters=run_parameters
+    )
 
     return output_dose_rate_DF
 
@@ -130,7 +146,7 @@ def run_from_power_law_gaussian_distribution(
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
         **kwargs
-) -> pd.DataFrame:
+) -> DoseRateFrame:
     """
     Perform a run to calculate dose rates using a combined power law rigidity spectrum and Gaussian pitch angle distribution.
 
@@ -157,7 +173,7 @@ def run_from_power_law_gaussian_distribution(
         Additional arguments to pass to run_from_spectra.
 
     Returns:
-    - output_dose_rate_DF: DataFrame
+    - output_dose_rate_DF: DoseRateFrame
         DataFrame containing the calculated dose rates.
     """
     spec_to_use = CommonModifiedPowerLawSpectrumSplit if use_split_spectrum else CommonModifiedPowerLawSpectrum
@@ -180,7 +196,7 @@ def run_from_double_power_law_gaussian_distribution(
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
         **kwargs
-) -> pd.DataFrame:
+) -> DoseRateFrame:
     """
     Perform a run to calculate dose rates using a double power law rigidity spectrum and Gaussian pitch angle distribution.
 
@@ -213,7 +229,7 @@ def run_from_double_power_law_gaussian_distribution(
         Additional arguments to pass to run_from_spectra.
 
     Returns:
-    - output_dose_rate_DF: DataFrame
+    - output_dose_rate_DF: DoseRateFrame
         DataFrame containing the calculated dose rates.
     """
     spec_to_use = CommonModifiedPowerLawSpectrumSplit if use_split_spectrum else lambda J0,gamma,deltaGamma:CommonModifiedPowerLawSpectrum(J0,gamma,deltaGamma, lowerLimit=0.814529,upperLimit=21.084584)
@@ -235,7 +251,7 @@ def run_from_power_law_Beeck_gaussian_distribution(
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
         **kwargs
-) -> pd.DataFrame:
+) -> DoseRateFrame:
     """
     Perform a run to calculate dose rates using a power law rigidity spectrum and Beeck Gaussian pitch angle distribution.
 
@@ -264,7 +280,7 @@ def run_from_power_law_Beeck_gaussian_distribution(
         Additional arguments to pass to run_from_spectra.
 
     Returns:
-    - output_dose_rate_DF: DataFrame
+    - output_dose_rate_DF: DoseRateFrame
         DataFrame containing the calculated dose rates.
     """
     spec_to_use = CommonModifiedPowerLawSpectrum if use_split_spectrum else CommonModifiedPowerLawSpectrumSplit
@@ -286,7 +302,7 @@ def run_from_DLR_cosmic_ray_model(
         date_and_time: Optional[dt.datetime] = None,
         asymp_dir_file: Optional[str] = None,
         **kwargs
-) -> pd.DataFrame:
+) -> DoseRateFrame:
     """
     Perform a run to calculate dose rates using the DLR cosmic ray model.
 
@@ -303,7 +319,7 @@ def run_from_DLR_cosmic_ray_model(
         Additional arguments to pass to run_from_spectra.
 
     Returns:
-    - output_dose_rate_DF: DataFrame
+    - output_dose_rate_DF: DoseRateFrame
         DataFrame containing the calculated dose rates.
     """
     if (W_parameter is None) and (OULU_count_rate_in_seconds is None):
