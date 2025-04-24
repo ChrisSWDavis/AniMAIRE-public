@@ -4,43 +4,36 @@ import scipy
 import numpy as np
 import datetime
 import matplotlib.pyplot as plt
+from typing import Optional, Callable, Any, List, Union
 from CosRayModifiedISO import CosRayModifiedISO
+from .utils import Distribution, SummedFunction, ScaledFunction
 
 print("WARNING: currently unknown whether the reported spectral weighting factor should be in terms of energy or rigidity")
 
-# Define picklable callable classes for function composition
-class SummedFunction:
-    """Callable class that combines two functions by addition."""
-    def __init__(self, func1, func2):
-        self.func1 = func1
-        self.func2 = func2
-        
-    def __call__(self, *args, **kwargs):
-        return self.func1(*args, **kwargs) + self.func2(*args, **kwargs)
-        
-class ScaledFunction:
-    """Callable class that scales a function by a factor."""
-    def __init__(self, func, scale):
-        self.func = func
-        self.scale = scale
-        
-    def __call__(self, *args, **kwargs):
-        return self.scale * self.func(*args, **kwargs)
-
-class rigiditySpectrum():
+class RigiditySpectrum(Distribution[float]):
     """
     Base class for rigidity spectra.
     """
 
-    def __init__(self, rigiditySpec: callable = None):
+    def __init__(self, rigiditySpec: Optional[Callable[[float], float]] = None):
         """
         Initialize the rigidity spectrum.
+        
+        Args:
+            rigiditySpec: Callable function for evaluating the spectrum, if None,
+                          the subclass evaluate method will be used
         """
         self.rigiditySpec = rigiditySpec or self.evaluate
 
     def evaluate(self, x: float) -> float:
         """
         Default evaluate method, should be overridden by subclasses.
+        
+        Args:
+            x: The rigidity in GV
+            
+        Returns:
+            float: The value of the rigidity spectrum
         """
         raise NotImplementedError("Subclasses must implement evaluate method")
 
@@ -48,50 +41,57 @@ class rigiditySpectrum():
         """
         Evaluate the rigidity spectrum at a given rigidity.
 
-        Parameters:
-        - x: float
-            The rigidity.
+        Args:
+            x: The rigidity in GV
 
         Returns:
-        - float
-            The value of the rigidity spectrum.
+            float: The value of the rigidity spectrum
         """
         return self.rigiditySpec(x)
     
-    def __add__(self, right: 'rigiditySpectrum') -> 'rigiditySpectrum':
+    def __add__(self, right: 'RigiditySpectrum') -> 'RigiditySpectrum':
         """
         Add two rigidity spectra.
 
-        Parameters:
-        - right: rigiditySpectrum
-            The other rigidity spectrum.
+        Args:
+            right: The other rigidity spectrum
 
         Returns:
-        - rigiditySpectrum
-            The sum of the two rigidity spectra.
+            A new rigidity spectrum representing the sum
         """
-        summed_spectrum = rigiditySpectrum()
+        summed_spectrum = RigiditySpectrum()
         summed_spectrum.rigiditySpec = SummedFunction(self.rigiditySpec, right.rigiditySpec)
         return summed_spectrum
     
-    def plot(self, title=None, ax=None, min_rigidity=0.1, max_rigidity=20, **kwargs):
+    def __mul__(self, scalar: float) -> 'RigiditySpectrum':
+        """
+        Multiply the spectrum by a scalar.
+        
+        Args:
+            scalar: The scaling factor
+            
+        Returns:
+            A new scaled rigidity spectrum
+        """
+        scaled_spectrum = RigiditySpectrum()
+        scaled_spectrum.rigiditySpec = ScaledFunction(self.rigiditySpec, scalar)
+        return scaled_spectrum
+        
+    __rmul__ = __mul__
+    
+    def plot(self, title: Optional[str] = None, ax: Optional[plt.Axes] = None, 
+             min_rigidity: float = 0.1, max_rigidity: float = 20, **kwargs: Any) -> plt.Axes:
         """
         Plot the spectrum for this spectrum object.
         
-        Parameters:
-        -----------
-        title : str, optional
-            Title for the plot. If None, a default title is used.
-        ax : matplotlib.axes.Axes, optional
-            Axes to plot on. If None, a new figure is created.
-        min_rigidity : float, optional
-            Minimum rigidity in GV for spectrum plot (default: 0.1)
-        max_rigidity : float, optional
-            Maximum rigidity in GV for spectrum plot (default: 20)
+        Args:
+            title: Title for the plot. If None, a default title is used
+            ax: Axes to plot on. If None, a new figure is created
+            min_rigidity: Minimum rigidity in GV for spectrum plot (default: 0.1)
+            max_rigidity: Maximum rigidity in GV for spectrum plot (default: 20)
+            **kwargs: Additional arguments passed to plot function
         
         Returns:
-        --------
-        matplotlib.axes.Axes
             The axes containing the plot
         """
         
@@ -109,7 +109,7 @@ class rigiditySpectrum():
     
         return ax
 
-class powerLawSpectrum(rigiditySpectrum):
+class PowerLawSpectrum(RigiditySpectrum):
     """
     Power law rigidity spectrum.
     """
@@ -118,11 +118,9 @@ class powerLawSpectrum(rigiditySpectrum):
         """
         Initialize the power law spectrum.
 
-        Parameters:
-        - normalisationFactor: float
-            The normalization factor.
-        - spectralIndex: float
-            The spectral index.
+        Args:
+            normalisationFactor: The normalization factor
+            spectralIndex: The spectral index
         """
         super().__init__(None)
         self.normalisationFactor = normalisationFactor
@@ -131,10 +129,16 @@ class powerLawSpectrum(rigiditySpectrum):
     def evaluate(self, x: float) -> float:
         """
         Evaluate the power law spectrum.
+        
+        Args:
+            x: The rigidity in GV
+            
+        Returns:
+            float: The value of the power law spectrum
         """
         return self.normalisationFactor * (x ** self.spectralIndex)
 
-class interpolatedInputFileSpectrum(rigiditySpectrum):
+class InterpolatedInputFileSpectrum(RigiditySpectrum):
     """
     Interpolated rigidity spectrum from an input file.
     """
@@ -143,25 +147,22 @@ class interpolatedInputFileSpectrum(rigiditySpectrum):
         """
         Initialize the interpolated spectrum.
 
-        Parameters:
-        - inputFileName: str
-            The path to the input file.
+        Args:
+            inputFileName: The path to the input file
         """
         self.inputFilename = inputFileName
         interp_func = self.readSpecFromCSV(self.inputFilename)
         super().__init__(interp_func)
 
-    def readSpecFromCSV(self, inputFileName: str) -> callable:
+    def readSpecFromCSV(self, inputFileName: str) -> Callable[[float], float]:
         """
         Read the spectrum from a CSV file.
 
-        Parameters:
-        - inputFileName: str
-            The name of the input file.
+        Args:
+            inputFileName: The name of the input file
 
         Returns:
-        - callable
-            The interpolated spectrum.
+            The interpolated spectrum function
         """
         inputDF = pd.read_csv(inputFileName, header=None)
         rigidityList = inputDF[0]  # GV
@@ -173,28 +174,27 @@ class interpolatedInputFileSpectrum(rigiditySpectrum):
         
         return rigiditySpec
 
-class DLRmodelSpectrum(rigiditySpectrum):
+class DLRmodelSpectrum(RigiditySpectrum):
     """
     DLR model rigidity spectrum.
     """
 
-    def __init__(self, atomicNumber: int, date_and_time: 'datetime' = None, OULUcountRateInSeconds: float = None, W_parameter: float = None):
+    def __init__(self, atomicNumber: int, date_and_time: Optional['datetime.datetime'] = None, 
+                 OULUcountRateInSeconds: Optional[float] = None, W_parameter: Optional[float] = None):
         """
         Initialize the DLR model spectrum.
 
-        Parameters:
-        - atomicNumber: int
-            The atomic number of the particle.
-        - date_and_time: datetime, optional
-            The date and time for the spectrum.
-        - OULUcountRateInSeconds: float, optional
-            The OULU count rate in seconds.
-        - W_parameter: float, optional
-            The W parameter for the DLR model.
+        Args:
+            atomicNumber: The atomic number of the particle
+            date_and_time: The date and time for the spectrum
+            OULUcountRateInSeconds: The OULU count rate in seconds
+            W_parameter: The W parameter for the DLR model
+            
+        Note: Exactly one of date_and_time, OULUcountRateInSeconds or W_parameter must be provided
         """
         if not sum([(date_and_time is not None), (OULUcountRateInSeconds is not None), (W_parameter is not None)]) == 1:
             print("Error: exactly one supplied input out of the date and time, OULU count rate per second or the W parameter, to the DLR model spectrum must be given!")
-            raise Exception
+            raise ValueError("Exactly one parameter must be provided")
 
         if date_and_time is not None:
             self._generatedSpectrumDF = CosRayModifiedISO.getSpectrumUsingTimestamp(timestamp=date_and_time, atomicNumber=atomicNumber)
@@ -213,26 +213,22 @@ class DLRmodelSpectrum(rigiditySpectrum):
         
         super().__init__(interp_func)
 
-class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
+class CommonModifiedPowerLawSpectrum(RigiditySpectrum):
     """
     Common modified power law rigidity spectrum.
     """
 
-    def __init__(self, J0: float, gamma: float, deltaGamma: float, lowerLimit: float = -np.inf, upperLimit: float = np.inf):
+    def __init__(self, J0: float, gamma: float, deltaGamma: float, 
+                 lowerLimit: float = -np.inf, upperLimit: float = np.inf):
         """
         Initialize the common modified power law spectrum.
 
-        Parameters:
-        - J0: float
-            The normalization factor.
-        - gamma: float
-            The spectral index.
-        - deltaGamma: float
-            The modification factor for the spectral index.
-        - lowerLimit: float, optional
-            The lower limit for the rigidity.
-        - upperLimit: float, optional
-            The upper limit for the rigidity.
+        Args:
+            J0: The normalization factor (m-2 s-1 sr-1 GV-1)
+            gamma: The spectral index
+            deltaGamma: The modification factor for the spectral index
+            lowerLimit: The lower limit for the rigidity (default: -inf)
+            upperLimit: The upper limit for the rigidity (default: inf)
         """
         super().__init__(None)
         self.lowerLimit = lowerLimit
@@ -244,6 +240,12 @@ class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
     def specIndexModification(self, P: float) -> float:
         """
         Calculate the spectral index modification.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The spectral index modification
         """
         return self.deltaGamma * (P - 1)
     
@@ -251,17 +253,13 @@ class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
         """
         Step function for the rigidity spectrum.
 
-        Parameters:
-        - rigidity: float
-            The rigidity.
-        - lowerLimit: float
-            The lower limit for the rigidity.
-        - upperLimit: float
-            The upper limit for the rigidity.
+        Args:
+            rigidity: The rigidity in GV
+            lowerLimit: The lower limit for the rigidity
+            upperLimit: The upper limit for the rigidity
 
         Returns:
-        - float
-            The value of the step function.
+            1.0 if rigidity is within limits, 0.0 otherwise
         """
         if (rigidity >= lowerLimit) and (rigidity <= upperLimit):
             return 1.0
@@ -271,10 +269,17 @@ class CommonModifiedPowerLawSpectrum(rigiditySpectrum):
     def evaluate(self, P: float) -> float:
         """
         Evaluate the common modified power law spectrum.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The spectrum value at the given rigidity
         """
-        return self.J0 * self.step_function(P, self.lowerLimit, self.upperLimit) * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
+        return self.J0 * self.step_function(P, self.lowerLimit, self.upperLimit) * \
+               (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
 
-class CommonModifiedPowerLawSpectrumSplit(rigiditySpectrum):
+class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
     """
     Common modified power law rigidity spectrum with split spectral index modification.
     """
@@ -283,13 +288,10 @@ class CommonModifiedPowerLawSpectrumSplit(rigiditySpectrum):
         """
         Initialize the common modified power law spectrum with split spectral index modification.
 
-        Parameters:
-        - J0: float
-            The normalization factor.
-        - gamma: float
-            The spectral index.
-        - deltaGamma: float
-            The modification factor for the spectral index.
+        Args:
+            J0: The normalization factor (m-2 s-1 sr-1 GV-1)
+            gamma: The spectral index
+            deltaGamma: The modification factor for the spectral index
         """
         super().__init__(None)
         self.J0 = J0  # m-2 s-1 sr-1 GV-1
@@ -299,23 +301,55 @@ class CommonModifiedPowerLawSpectrumSplit(rigiditySpectrum):
     def specIndexModification_high(self, P: float) -> float:
         """
         Calculate the spectral index modification for high rigidity.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The high rigidity spectral index modification
         """
         return self.deltaGamma * (P - 1)
     
     def specIndexModification_low(self, P: float) -> float:
         """
         Calculate the spectral index modification for low rigidity.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The low rigidity spectral index modification
         """
         return self.deltaGamma * (P)
     
     def specIndexModification(self, P: float) -> float:
         """
         Calculate the spectral index modification.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The appropriate spectral index modification based on rigidity
         """
         return self.specIndexModification_high(P) if P > 1.0 else self.specIndexModification_low(P)
     
     def evaluate(self, P: float) -> float:
         """
         Evaluate the common modified power law spectrum with split spectral index modification.
+        
+        Args:
+            P: The rigidity in GV
+            
+        Returns:
+            The spectrum value at the given rigidity
         """
         return self.J0 * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
+
+# For backward compatibility
+rigiditySpectrum = RigiditySpectrum
+powerLawSpectrum = PowerLawSpectrum
+interpolatedInputFileSpectrum = InterpolatedInputFileSpectrum
+DLRmodelSpectrum = DLRmodelSpectrum
+CommonModifiedPowerLawSpectrum = CommonModifiedPowerLawSpectrum
+CommonModifiedPowerLawSpectrumSplit = CommonModifiedPowerLawSpectrumSplit

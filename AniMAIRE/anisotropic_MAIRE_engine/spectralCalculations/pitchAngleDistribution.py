@@ -2,40 +2,23 @@ import numpy as np
 from spacepy.coordinates import Coords as spaceCoords
 import copy
 import matplotlib.pyplot as plt
+from typing import Optional, Callable, Any, Tuple
+from .utils import Distribution, SummedFunction, ScaledFunction
 
-# Define picklable callable classes for function composition
-class SummedFunction:
-    """Callable class that combines two functions by addition."""
-    def __init__(self, func1, func2):
-        self.func1 = func1
-        self.func2 = func2
-        
-    def __call__(self, *args, **kwargs):
-        return self.func1(*args, **kwargs) + self.func2(*args, **kwargs)
-        
-class ScaledFunction:
-    """Callable class that scales a function by a factor."""
-    def __init__(self, func, scale):
-        self.func = func
-        self.scale = scale
-        
-    def __call__(self, *args, **kwargs):
-        return self.scale * self.func(*args, **kwargs)
-
-class pitchAngleDistribution():
+class PitchAngleDistribution(Distribution[float]):
     """
     Base class for pitch angle distributions.
     """
 
     def __init__(self, 
-                 pitch_angle_distribution: callable = None, 
+                 pitch_angle_distribution: Optional[Callable[[float, float], float]] = None, 
                  reference_latitude_in_GSM: float = 0.0, 
                  reference_longitude_in_GSM: float = 0.0):
         """
         Initialize the pitch angle distribution.
 
         Parameters:
-        - pitch_angle_distribution: callable
+        - pitch_angle_distribution: callable, optional
             Function describing the pitch angle distribution.
         - reference_latitude_in_GSM: float
             Reference latitude in GSM coordinates.
@@ -52,6 +35,13 @@ class pitchAngleDistribution():
     def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
         Default evaluate method, should be overridden by subclasses.
+        
+        Args:
+            pitchAngle: The pitch angle in radians
+            rigidity: The rigidity in GV
+            
+        Returns:
+            float: The value of the pitch angle distribution
         """
         raise NotImplementedError("Subclasses must implement evaluate method")
 
@@ -71,23 +61,24 @@ class pitchAngleDistribution():
         """
         return self.pitchAngleDistFunction(pitchAngle, rigidity)
     
-    def __add__(self, right: 'pitchAngleDistribution') -> 'pitchAngleDistribution':
+    def __add__(self, right: 'PitchAngleDistribution') -> 'PitchAngleDistribution':
         """
         Add two pitch angle distributions.
 
         Parameters:
-        - right: pitchAngleDistribution
+        - right: PitchAngleDistribution
             The other pitch angle distribution.
 
         Returns:
-        - pitchAngleDistribution
+        - PitchAngleDistribution
             The sum of the two pitch angle distributions.
         """
         summed_dist = copy.deepcopy(self)
         summed_dist.pitchAngleDistFunction = SummedFunction(self.pitchAngleDistFunction, right.pitchAngleDistFunction)
         return summed_dist
     
-    def plot(self, title=None, reference_rigidity=1.0, ax=None, **kwargs):
+    def plot(self, title: Optional[str] = None, reference_rigidity: float = 1.0, 
+             ax: Optional[plt.Axes] = None, **kwargs: Any) -> plt.Axes:
         """
         Plot the pitch angle distribution.
         
@@ -119,7 +110,7 @@ class pitchAngleDistribution():
         
         return ax
     
-    def __mul__(self, right: float) -> 'pitchAngleDistribution':
+    def __mul__(self, right: float) -> 'PitchAngleDistribution':
         """
         Multiply the pitch angle distribution by a scalar.
 
@@ -128,7 +119,7 @@ class pitchAngleDistribution():
             The scalar.
 
         Returns:
-        - pitchAngleDistribution
+        - PitchAngleDistribution
             The scaled pitch angle distribution.
         """
         multiplied_dist = copy.deepcopy(self)
@@ -137,47 +128,76 @@ class pitchAngleDistribution():
 
     __rmul__ = __mul__
 
-class cosinePitchAngleDistribution(pitchAngleDistribution):
+
+class CosinePitchAngleDistribution(PitchAngleDistribution):
     """
     Cosine pitch angle distribution.
     """
 
-    def __init__(self, reference_latitude_in_GSM=0.0, reference_longitude_in_GSM=0.0):
+    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
         """
         Initialize the cosine pitch angle distribution.
+        
+        Parameters:
+        - reference_latitude_in_GSM: float
+            Reference latitude in GSM coordinates.
+        - reference_longitude_in_GSM: float
+            Reference longitude in GSM coordinates.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
     
-    def evaluate(self, pitchAngle, rigidity):
+    def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
         Evaluate the cosine pitch angle distribution.
+        
+        Args:
+            pitchAngle: The pitch angle in radians
+            rigidity: The rigidity in GV
+            
+        Returns:
+            float: The value of the cosine pitch angle distribution
         """
         return np.abs(0.5 * np.sin(2 * pitchAngle))
 
-class isotropicPitchAngleDistribution(pitchAngleDistribution):
+
+class IsotropicPitchAngleDistribution(PitchAngleDistribution):
     """
     Isotropic pitch angle distribution.
     """
 
-    def __init__(self, reference_latitude_in_GSM=0.0, reference_longitude_in_GSM=0.0):
+    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
         """
         Initialize the isotropic pitch angle distribution.
+        
+        Parameters:
+        - reference_latitude_in_GSM: float
+            Reference latitude in GSM coordinates.
+        - reference_longitude_in_GSM: float
+            Reference longitude in GSM coordinates.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
     
-    def evaluate(self, pitchAngle, rigidity):
+    def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
         Evaluate the isotropic pitch angle distribution.
+        
+        Args:
+            pitchAngle: The pitch angle in radians
+            rigidity: The rigidity in GV
+            
+        Returns:
+            float: The value of the isotropic pitch angle distribution (always 1)
         """
         return 1
 
-class gaussianPitchAngleDistribution(pitchAngleDistribution):
+
+class GaussianPitchAngleDistribution(PitchAngleDistribution):
     """
     Gaussian pitch angle distribution.
     """
 
     def __init__(self, normFactor: float, sigma: float, alpha: float = 0.0, 
-                 reference_latitude_in_GSM=0.0, reference_longitude_in_GSM=0.0):
+                 reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
         """
         Initialize the Gaussian pitch angle distribution.
 
@@ -188,25 +208,37 @@ class gaussianPitchAngleDistribution(pitchAngleDistribution):
             The standard deviation of the Gaussian distribution.
         - alpha: float, optional
             The mean of the Gaussian distribution.
+        - reference_latitude_in_GSM: float
+            Reference latitude in GSM coordinates.
+        - reference_longitude_in_GSM: float
+            Reference longitude in GSM coordinates.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
         self.normFactor = normFactor
         self.sigma = sigma
         self.alpha = alpha
     
-    def evaluate(self, pitchAngle, rigidity):
+    def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
         Evaluate the Gaussian pitch angle distribution.
+        
+        Args:
+            pitchAngle: The pitch angle in radians
+            rigidity: The rigidity in GV
+            
+        Returns:
+            float: The value of the Gaussian pitch angle distribution
         """
         return self.normFactor * np.exp(-(pitchAngle - self.alpha)**2 / (self.sigma**2))
 
-class gaussianBeeckPitchAngleDistribution(pitchAngleDistribution):
+
+class GaussianBeeckPitchAngleDistribution(PitchAngleDistribution):
     """
     Gaussian Beeck pitch angle distribution.
     """
 
     def __init__(self, normFactor: float, A: float, B: float,
-                 reference_latitude_in_GSM=0.0, reference_longitude_in_GSM=0.0):
+                 reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
         """
         Initialize the Gaussian Beeck pitch angle distribution.
 
@@ -217,15 +249,33 @@ class gaussianBeeckPitchAngleDistribution(pitchAngleDistribution):
             Parameter A for the distribution.
         - B: float
             Parameter B for the distribution.
+        - reference_latitude_in_GSM: float
+            Reference latitude in GSM coordinates.
+        - reference_longitude_in_GSM: float
+            Reference longitude in GSM coordinates.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
         self.normFactor = normFactor
         self.A = A
         self.B = B
     
-    def evaluate(self, pitchAngle_radians, rigidity):
+    def evaluate(self, pitchAngle_radians: float, rigidity: float) -> float:
         """
         Evaluate the Gaussian Beeck pitch angle distribution.
+        
+        Args:
+            pitchAngle_radians: The pitch angle in radians
+            rigidity: The rigidity in GV
+            
+        Returns:
+            float: The value of the Gaussian Beeck pitch angle distribution
         """
         return self.normFactor * np.exp((-0.5 * (pitchAngle_radians - (np.sin(pitchAngle_radians) * np.cos(pitchAngle_radians)))) / \
                                         (self.A - (0.5 * (self.A - self.B) * (1 - np.cos(pitchAngle_radians)))))
+
+# For backward compatibility
+pitchAngleDistribution = PitchAngleDistribution
+cosinePitchAngleDistribution = CosinePitchAngleDistribution
+isotropicPitchAngleDistribution = IsotropicPitchAngleDistribution
+gaussianPitchAngleDistribution = GaussianPitchAngleDistribution
+gaussianBeeckPitchAngleDistribution = GaussianBeeckPitchAngleDistribution
