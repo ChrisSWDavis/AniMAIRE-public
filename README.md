@@ -31,6 +31,7 @@ You can use AniMAIRE to produce dose rate data and maps throughout large space w
 - [Simple isotropic runs and plotting](#simple-isotropic-runs-and-plotting)
 - [Anisotropic runs](#anisotropic-runs)
 - [Functions for running AniMAIRE for specific situations and for a past timestamp](#functions-for-running-animaire-for-specific-situations-and-for-a-past-timestamp)
+- [Processing Time-Series Event Data with AniMAIRE_event](#processing-time-series-event-data-with-animaire_event)
 
 ## Installation
 
@@ -430,6 +431,117 @@ def run_from_power_law_gaussian_distribution(J0, gamma, deltaGamma, sigma,
 ```
 
 Here `J0`, `gamma`, `deltaGamma`, `sigma`, `reference_pitch_angle_latitude`, `reference_pitch_angle_longitude` are all defined as specified in the format of papers like [Mishev, A., Usoskin, I. Analysis of the Ground-Level Enhancements on 14 July 2000 and 13 December 2006 Using Neutron Monitor Data. Sol Phys 291, 1225–1239 (2016). https://doi.org/10.1007/s11207-016-0877-2](https://link.springer.com/article/10.1007/s11207-016-0877-2).
+
+### Processing Time-Series Event Data with AniMAIRE_event
+
+AniMAIRE now includes a powerful new class called `AniMAIRE_event` that allows you to process and analyze Ground Level Enhancement (GLE) events or any time-varying spectral data across multiple timestamps. This feature enables comprehensive temporal analysis of radiation events throughout their evolution.
+
+#### Basic Usage
+
+The `AniMAIRE_event` class takes a CSV file containing time-series spectral parameters and processes each timestamp to create a complete picture of an event over time:
+
+```python
+from AniMAIRE import AniMAIRE_event
+
+# Initialize with a spectra file containing time-series data
+gle_event = AniMAIRE_event("path/to/your/GLE74_spectra.csv")
+
+# Get a summary of the input spectra
+gle_event.summarize_spectra()
+
+# Run AniMAIRE for all timestamps in the file (or limit to a specific number)
+gle_event.run_AniMAIRE(n_timestamps=5, use_cache=True)
+
+# Get a summary of the calculated results
+gle_event.summarize_results()
+```
+
+#### Input File Format
+
+The input CSV file should contain columns with spectral parameters for each timestamp. The class supports the following column mappings (either name will work):
+
+| CSV Column | Internal Name | Description |
+|------------|---------------|-------------|
+| Time | datetime | Timestamp for the spectrum |
+| J_0 | J0 | Differential flux normalization factor |
+| gamma | gamma | Spectral index |
+| d_gamma | deltaGamma | Change in spectral index for double power law |
+| Sigma1 | sigma_1 | First Gaussian width parameter for pitch angle distribution |
+| Sigma2 | sigma_2 | Second Gaussian width parameter for pitch angle distribution |
+| B | B | Relative contribution of second Gaussian term |
+| SymLat | reference_pitch_angle_latitude | Reference pitch angle latitude (degrees) |
+| SymLong | reference_pitch_angle_longitude | Reference pitch angle longitude (degrees) |
+
+#### Visualizing Event Data
+
+`AniMAIRE_event` provides multiple methods for visualizing and analyzing the time evolution of radiation events:
+
+```python
+# Create a 2D map animation at flight altitude (12.192 km ≈ 40,000 ft)
+gle_event.create_gle_map_animation(altitude=12.192, save_mp4=True)
+
+# Create a 3D globe animation
+gle_event.create_gle_globe_animation(altitude=12.192, save_mp4=True)
+
+# Plot the peak dose rate map for the entire event
+gle_event.plot_peak_dose_rate_map(altitude=12.192, dose_type='edose')
+
+# Plot the integrated dose map for the entire event
+gle_event.plot_integrated_dose_map(altitude=12.192, dose_type='edose')
+
+# Create a time-series plot at a specific location
+gle_event.plot_timeseries_at_location(
+    latitude=35.0, longitude=-100.0, altitude=12.192, dose_type='edose'
+)
+```
+
+#### Advanced Analysis
+
+The `AniMAIRE_event` class provides methods for comprehensive analysis of an event:
+
+```python
+# Calculate the integrated dose over the entire event
+integrated_dose = gle_event.calculate_integrated_dose(altitude=12.192, dose_type='edose')
+
+# Find the peak dose rates at each location
+peak_dose_map = gle_event.get_peak_dose_rate_map(altitude=12.192, dose_type='edose')
+
+# Get dose rate at a specific location and time
+dose_rate = gle_event.get_dose_rate_at_location(
+    latitude=35.0, longitude=-100.0, altitude=12.192, 
+    timestamp=some_datetime, dose_type='edose'
+)
+
+# Export all dose rate data to NetCDF for further analysis
+gle_event.export_to_netcdf("GLE74_results.nc")
+```
+
+#### Using Cached Results
+
+To improve performance, especially for repeated analyses, the `AniMAIRE_event` class includes caching functionality:
+
+```python
+# Run with caching enabled (default)
+gle_event.run_AniMAIRE(use_cache=True)
+```
+
+This creates a directory `.AniMAIRE_event_cache` in your working directory to store intermediate results, which can significantly speed up repeated calculations.
+
+#### Helper Function
+
+There's also a helper function for quickly processing a GLE file:
+
+```python
+from AniMAIRE.AniMAIRE_event import run_from_GLE_spectrum_file
+
+# Run AniMAIRE for all timestamps in a GLE file
+gle_object = run_from_GLE_spectrum_file(
+    "path/to/your/GLE74_spectra.csv",
+    # Additional parameters to pass to run_AniMAIRE
+    array_of_lats_and_longs=[[35.0, -100.0], [40.0, 0.0]],
+    altitudes_in_km=[12.192]
+)
+```
 
 ## References
 
