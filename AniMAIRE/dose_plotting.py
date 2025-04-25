@@ -370,7 +370,7 @@ def create_single_dose_map_plotly(DF_to_use,
 
     return doseRateMap
 
-def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=False):
+def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
     """
     Create animations for GLE event data.
     
@@ -384,6 +384,8 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
         Whether to save the animation as a GIF file. Default is False.
     save_mp4 : bool, optional
         Whether to save the animation as an MP4 file. Default is False.
+    **kwargs : dict
+        Additional keyword arguments to pass to the plotting functions
     """
     
     # Find the maximum dose value across all timestamps
@@ -420,7 +422,8 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
                             plot_title=f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
                             #colorbar_label=f"Effective Dose Rate (μSv/hr)",
                             #central_latitude=50.0,
-                            hue_range=(0, max_dose))
+                            hue_range=(0, max_dose),
+                            **kwargs)
         
         return [plt.gca()]
 
@@ -482,7 +485,7 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
     print(f"GLE Animation at {altitude} km (max dose: {max_dose} μSv/hr):")
     return HTML(video)  # Return HTML object instead of displaying it directly
 
-def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp4=False):
+def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
     """
     Create animations for GLE event data.
     
@@ -496,6 +499,8 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
         Whether to save the animation as a GIF file. Default is False.
     save_mp4 : bool, optional
         Whether to save the animation as an MP4 file. Default is False.
+    **kwargs : dict
+        Additional keyword arguments to pass to the plotting functions
     """
     
     # Find the maximum dose value across all timestamps
@@ -527,11 +532,18 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
         # Extract data for the specified altitude
         data_df = df.query(f'`altitude (km)` == {altitude}')
         
-        outputted_figure = plot_on_spherical_globe(data_df,
-                            plot_title=f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
-                            legend_label=f"Effective Dose Rate (μSv/hr)",
-                            central_latitude=50.0,
-                            hue_range=(0, max_dose))
+        # Set up default plot parameters that can be overridden by kwargs
+        plot_params = {
+            'plot_title': f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
+            'legend_label': f"Effective Dose Rate (μSv/hr)",
+            'central_latitude': 50.0,
+            'hue_range': (0, max_dose)
+        }
+        
+        # Update with user-provided kwargs
+        plot_params.update(kwargs)
+        
+        outputted_figure = plot_on_spherical_globe(data_df, **plot_params)
         
         return [plt.gca()]
 

@@ -23,6 +23,118 @@ class AniMAIRE_event():
         self.spectra_file_path = spectra_file_path
         self.raw_spectra_data = pd.read_csv(spectra_file_path)
         self.spectra = self.correctly_formatted_spectra()
+        self.dose_rate_components = {} # Track components that were added to create this event
+
+    def __add__(self, other):
+        """
+        Add two AniMAIRE_events or an AniMAIRE_event and a DoseRateFrame.
+
+        Parameters:
+        -----------
+        other : AniMAIRE_event or DoseRateFrame
+            The object to add to this event
+
+        Returns:
+        --------
+        AniMAIRE_event
+            A new AniMAIRE_event with combined dose rates
+
+        Raises:
+        -------
+        ValueError
+            If timestamps don't match when adding two events
+            If this event hasn't been run yet (no dose_rates)
+        """
+        if not hasattr(self, 'dose_rates') or not self.dose_rates:
+            raise ValueError("This event doesn't have dose rates. Run run_AniMAIRE() first.")
+
+        # Create new event with the same spectral data
+        new_event = AniMAIRE_event(self.spectra_file_path)
+        new_event.dose_rates = {}
+        
+        # Initialize dose_rate_components with this event
+        new_event.dose_rate_components = {'base': self}
+        
+        if isinstance(other, AniMAIRE_event):
+            # Check if other event has been run
+            if not hasattr(other, 'dose_rates') or not other.dose_rates:
+                raise ValueError("The other event doesn't have dose rates. Run run_AniMAIRE() first.")
+                
+            # Check timestamps match
+            self_timestamps = set(self.dose_rates.keys())
+            other_timestamps = set(other.dose_rates.keys())
+            
+            if self_timestamps != other_timestamps:
+                raise ValueError("Events must have identical timestamps to be added together.")
+                
+            # Add corresponding frames
+            for ts in self_timestamps:
+                new_event.dose_rates[ts] = self.dose_rates[ts] + other.dose_rates[ts]
+            
+            # Add other to components
+            new_event.dose_rate_components['added_event'] = other
+            
+        elif hasattr(other, '__class__') and other.__class__.__name__ == 'DoseRateFrame':
+            # Add DoseRateFrame to every timestamp
+            for ts, frame in self.dose_rates.items():
+                new_event.dose_rates[ts] = frame + other
+                
+            # Add frame to components
+            new_event.dose_rate_components['added_frame'] = other
+            
+        else:
+            raise TypeError(f"Unsupported operand type: {type(other)}. Must be AniMAIRE_event or DoseRateFrame.")
+            
+        return new_event
+        
+    def __radd__(self, other):
+        """
+        Support for reflexive addition (when this AniMAIRE_event is the right operand).
+        
+        Parameters:
+        -----------
+        other : object
+            The object being added to this AniMAIRE_event
+            
+        Returns:
+        --------
+        AniMAIRE_event
+            A new AniMAIRE_event with combined dose rates
+            
+        Raises:
+        -------
+        TypeError
+            If the other operand is not a DoseRateFrame
+        """
+        # For the case of 0 + AniMAIRE_event (used in sum() operations)
+        if isinstance(other, (int, float)) and other == 0:
+            # Return a copy of self
+            new_event = AniMAIRE_event(self.spectra_file_path)
+            if hasattr(self, 'dose_rates'):
+                new_event.dose_rates = {ts: frame.copy() for ts, frame in self.dose_rates.items()}
+                new_event.dose_rate_components = {'base': self}
+            return new_event
+        
+        # Handle DoseRateFrame + AniMAIRE_event
+        if hasattr(other, '__class__') and other.__class__.__name__ == 'DoseRateFrame':
+            if not hasattr(self, 'dose_rates') or not self.dose_rates:
+                raise ValueError("This event doesn't have dose rates. Run run_AniMAIRE() first.")
+                
+            # Create new event with the same spectral data
+            new_event = AniMAIRE_event(self.spectra_file_path)
+            new_event.dose_rates = {}
+            
+            # Initialize dose_rate_components
+            new_event.dose_rate_components = {'base': self, 'added_frame': other}
+            
+            # Add DoseRateFrame to every timestamp
+            for ts, frame in self.dose_rates.items():
+                new_event.dose_rates[ts] = other + frame
+                
+            return new_event
+        
+        # Unsupported type
+        raise TypeError(f"Unsupported operand type: {type(other)}. Must be DoseRateFrame.")
 
     def correctly_formatted_spectra(self):
         # Map the columns from the input file to the expected AniMAIRE format
@@ -348,14 +460,14 @@ class AniMAIRE_event():
             
         return sorted(all_altitudes)
     
-    def create_gle_map_animation(self, altitude=12.192, save_gif=False, save_mp4=False):
-        return create_gle_map_animation(self.dose_rates, altitude, save_gif, save_mp4)
+    def create_gle_map_animation(self, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
+        return create_gle_map_animation(self.dose_rates, altitude, save_gif, save_mp4, **kwargs)
     
-    def create_gle_globe_animation(self, altitude=12.192, save_gif=False, save_mp4=False):
-        return create_gle_globe_animation(self.dose_rates, altitude, save_gif, save_mp4)
+    def create_gle_globe_animation(self, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
+        return create_gle_globe_animation(self.dose_rates, altitude, save_gif, save_mp4, **kwargs)
     
     def create_spectra_animation(gle_object, output_filename='GLE74_spectra_animation.mp4', fps=2, 
-                                spectra_xlim=(0.1, 20), spectra_ylim=(1e-16, 1e14)):
+                                spectra_xlim=(0.1, 20), spectra_ylim=(1e-16, 1e14), **kwargs):
         """
         Create an animation showing the evolution of rigidity spectra over time.
         
@@ -371,6 +483,8 @@ class AniMAIRE_event():
             x-axis limits (min, max) for the spectra plot (Rigidity in GV)
         spectra_ylim : tuple
             y-axis limits (min, max) for the spectra plot (Flux)
+        **kwargs : dict
+            Additional keyword arguments to pass to the plotting functions
         """
         # Get the timestamps in chronological order
         timestamps = sorted(gle_object.dose_rates.keys())
@@ -388,7 +502,7 @@ class AniMAIRE_event():
             dose_rate_frame = gle_object.dose_rates[timestamp]
             
             # Plot the spectra
-            dose_rate_frame.plot_spectra(ax=ax)
+            dose_rate_frame.plot_spectra(ax=ax, **kwargs)
             ax.set_title(f'Rigidity Spectra at {timestamp.strftime("%Y-%m-%d %H:%M")}')
             ax.set_xlim(spectra_xlim)
             ax.set_ylim(spectra_ylim)
@@ -409,7 +523,7 @@ class AniMAIRE_event():
 
 
     def create_pad_animation(gle_object, output_filename='GLE74_pad_animation.mp4', fps=2, 
-                            pad_xlim=(0, 3.14), pad_ylim=(0, 1.2)):
+                            pad_xlim=(0, 3.14), pad_ylim=(0, 1.2), **kwargs):
         """
         Create an animation showing the evolution of pitch angle distributions over time.
         
@@ -425,6 +539,8 @@ class AniMAIRE_event():
             x-axis limits (min, max) for the pitch angle distribution plot (radians)
         pad_ylim : tuple
             y-axis limits (min, max) for the pitch angle distribution plot (relative intensity)
+        **kwargs : dict
+            Additional keyword arguments to pass to the plotting functions
         """
         # Get the timestamps in chronological order
         timestamps = sorted(gle_object.dose_rates.keys())
@@ -442,7 +558,7 @@ class AniMAIRE_event():
             dose_rate_frame = gle_object.dose_rates[timestamp]
             
             # Plot the pitch angle distribution
-            dose_rate_frame.plot_pitch_angle_distributions(ax=ax)
+            dose_rate_frame.plot_pitch_angle_distributions(ax=ax, **kwargs)
             ax.set_title(f'Pitch Angle Distributions at {timestamp.strftime("%Y-%m-%d %H:%M")}')
             ax.set_xlim(pad_xlim)
             ax.set_ylim(pad_ylim)
@@ -464,7 +580,7 @@ class AniMAIRE_event():
 
     def create_combined_animation(gle_object, output_filename='GLE74_combined_animation.mp4', fps=2, 
                                 spectra_xlim=(0.1, 20), spectra_ylim=(1e-16, 1e14), 
-                                pad_xlim=(0, 3.14), pad_ylim=(0, 1.2)):
+                                pad_xlim=(0, 3.14), pad_ylim=(0, 1.2), **kwargs):
         """
         Create an animation showing the evolution of both rigidity spectra and pitch angle distributions over time.
         
@@ -484,6 +600,8 @@ class AniMAIRE_event():
             x-axis limits (min, max) for the pitch angle distribution plot (radians)
         pad_ylim : tuple
             y-axis limits (min, max) for the pitch angle distribution plot (relative intensity)
+        **kwargs : dict
+            Additional keyword arguments to pass to the plotting functions
         """
         # Get the timestamps in chronological order
         timestamps = sorted(gle_object.dose_rates.keys())
@@ -505,13 +623,13 @@ class AniMAIRE_event():
             dose_rate_frame = gle_object.dose_rates[timestamp]
             
             # Plot the spectra on the left subplot
-            dose_rate_frame.plot_spectra(ax=ax1)
+            dose_rate_frame.plot_spectra(ax=ax1, **kwargs)
             ax1.set_title(f'Rigidity Spectra at {timestamp.strftime("%Y-%m-%d %H:%M")}')
             ax1.set_xlim(spectra_xlim)
             ax1.set_ylim(spectra_ylim)
             
             # Plot the pitch angle distribution on the right subplot
-            dose_rate_frame.plot_pitch_angle_distributions(ax=ax2)
+            dose_rate_frame.plot_pitch_angle_distributions(ax=ax2, **kwargs)
             ax2.set_title(f'Pitch Angle Distributions at {timestamp.strftime("%Y-%m-%d %H:%M")}')
             ax2.set_xlim(pad_xlim)
             ax2.set_ylim(pad_ylim)

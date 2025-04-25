@@ -47,6 +47,92 @@ class DoseRateFrame(pd.DataFrame):
         self.particle_distributions = particle_distributions if particle_distributions is not None else []
         self.run_parameters = run_parameters
 
+    def __add__(self, other):
+        """
+        Add two DoseRateFrames together, combining their dose rate values.
+
+        Parameters:
+        -----------
+        other : DoseRateFrame
+            The DoseRateFrame to add to this one
+
+        Returns:
+        --------
+        DoseRateFrame
+            A new DoseRateFrame with combined dose rate values
+
+        Notes:
+        ------
+        - Numeric columns are added together
+        - Non-numeric columns are taken from this DoseRateFrame
+        - If timestamps differ, the resulting frame will have the timestamp of this frame
+        - Particle distributions from both frames are combined
+        """
+        if not isinstance(other, DoseRateFrame):
+            return NotImplemented
+
+        # Identify numeric columns that should be added
+        numeric_cols = self.select_dtypes(include='number').columns
+        coordinate_cols = ['latitude', 'longitude', 'altitude (km)']  # These should match, not add
+        
+        # Create a copy of self for the result
+        result = self.copy()
+        
+        # Create a merged DataFrame on coordinate columns
+        merged = pd.merge(self, other, on=coordinate_cols, how='inner', suffixes=('', '_other'))
+        
+        # Add numeric columns that exist in both frames
+        for col in numeric_cols:
+            if col in coordinate_cols:
+                continue  # Skip coordinate columns
+                
+            if col in other.columns:
+                other_col = col
+                result[col] = merged[col] + merged[other_col]
+        
+        # Create a new DoseRateFrame with the combined data
+        combined = DoseRateFrame(
+            data=result,
+            timestamp=self.timestamp,  # Keep the timestamp of the first frame
+            # Combine particle distributions if both have them
+            particle_distributions=(
+                self.particle_distributions + other.particle_distributions
+                if hasattr(other, 'particle_distributions') and other.particle_distributions
+                else self.particle_distributions
+            ),
+            # Merge run parameters if both have them
+            run_parameters={
+                **(self.run_parameters or {}),
+                **(other.run_parameters or {})
+            } if self.run_parameters or getattr(other, 'run_parameters', None) else self.run_parameters
+        )
+        
+        return combined
+        
+    def __radd__(self, other):
+        """
+        Support for reflexive addition (when this DoseRateFrame is the right operand).
+        
+        This method is called when the left operand doesn't know how to handle 
+        the addition with a DoseRateFrame.
+        
+        Parameters:
+        -----------
+        other : object
+            The object being added to this DoseRateFrame
+            
+        Returns:
+        --------
+        DoseRateFrame
+            A new DoseRateFrame with combined values
+        """
+        # For the case of 0 + DoseRateFrame (used in sum() operations)
+        if isinstance(other, (int, float)) and other == 0:
+            return self.copy()
+            
+        # For other types, try to use the regular addition method
+        return self.__add__(other)
+
     def get_altitudes(self):
         """
         Get the unique altitude values available in this DoseRateFrame.
