@@ -158,8 +158,29 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     # find weighting factors from the angles and rigidities
     #jacobian_function_to_use = lambda pitch_angle_in_radians:1/np.sin(2.0 * pitch_angle_in_radians)
         
-    pitchAngleFunctionToUse = lambda row: momentaDist.getPitchAngleDistribution()(row["angleBetweenIMFinRadians"], row["Rigidity"])
-    fullRigidityPitchWeightingFactorFunctionToUse = lambda row: momentaDist(row["angleBetweenIMFinRadians"], row["Rigidity"])
+    def pitchAngleFunctionToUse(row):
+        """
+        Calculate the pitch angle distribution value for a given row.
+        
+        Args:
+            row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+            
+        Returns:
+            The pitch angle distribution value
+        """
+        return momentaDist.getPitchAngleDistribution()(row["angleBetweenIMFinRadians"], row["Rigidity"])
+    
+    def fullRigidityPitchWeightingFactorFunctionToUse(row):
+        """
+        Calculate the combined rigidity and pitch angle weighting factor for a given row.
+        
+        Args:
+            row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+            
+        Returns:
+            The combined rigidity and pitch angle weighting factor
+        """
+        return momentaDist(row["angleBetweenIMFinRadians"], row["Rigidity"])
 
     print("calculating pitch angle weighting factors...")
     new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF)(pitchAngleFunctionToUse, axis=1)
@@ -174,9 +195,11 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = all_weighted_asymp_dirs * (new_asymptotic_direction_DF["Filter"] == 1)
     
     print("calculating energy + pitch combined weighting factors...")
+    print("converting rigidities to energies...")
     new_asymptotic_direction_DF["Energy"] = PRCT.convertParticleRigidityToEnergy(new_asymptotic_direction_DF["Rigidity"], 
                                                                       particleMassAU=particle_dist.particle_species.atomicMass, 
                                                                       particleChargeAU=particle_dist.particle_species.atomicNumber)
+    print("converting rigidity spectrum to energy spectrum...")
     energySpectrum = PRCT.convertParticleRigiditySpecToEnergySpec(new_asymptotic_direction_DF["Rigidity"],
                                                                   new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"],
                                                                   particleMassAU=particle_dist.particle_species.atomicMass, 
