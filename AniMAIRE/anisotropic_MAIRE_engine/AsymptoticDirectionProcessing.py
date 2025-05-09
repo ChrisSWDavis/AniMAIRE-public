@@ -17,6 +17,7 @@ import numba
 
 from .spectralCalculations.particleDistribution import particleDistribution
 from .spectralCalculations.momentaDistribution import momentaDistribution
+from .spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 
 memory_asymp_dirs = Memory("./cacheAsymptoticDirectionOutputs", verbose=0)
 
@@ -155,44 +156,58 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     momentaDist = particle_dist.momentum_distribution
     new_asymptotic_direction_DF = asymptotic_direction_DF.copy()
 
-    # find weighting factors from the angles and rigidities
-    #jacobian_function_to_use = lambda pitch_angle_in_radians:1/np.sin(2.0 * pitch_angle_in_radians)
-        
-    def pitchAngleFunctionToUse(row):
-        """
-        Calculate the pitch angle distribution value for a given row.
-        
-        Args:
-            row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+    # Check if we have an isotropic pitch angle distribution with fast mode
+    is_isotropic_fast = (isinstance(momentaDist.getPitchAngleDistribution(), IsotropicPitchAngleDistribution) and 
+                        getattr(momentaDist.getPitchAngleDistribution(), 'use_fast_calculation', False))
+
+    if not is_isotropic_fast:
+        # find weighting factors from the angles and rigidities
+        def pitchAngleFunctionToUse(row):
+            """
+            Calculate the pitch angle distribution value for a given row.
             
-        Returns:
-            The pitch angle distribution value
-        """
-        return momentaDist.getPitchAngleDistribution()(row["angleBetweenIMFinRadians"], row["Rigidity"])
-    
-    def fullRigidityPitchWeightingFactorFunctionToUse(row):
-        """
-        Calculate the combined rigidity and pitch angle weighting factor for a given row.
+            Args:
+                row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+                
+            Returns:
+                The pitch angle distribution value
+            """
+            return momentaDist.getPitchAngleDistribution()(row["angleBetweenIMFinRadians"], row["Rigidity"])
         
-        Args:
-            row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+        def fullRigidityPitchWeightingFactorFunctionToUse(row):
+            """
+            Calculate the combined rigidity and pitch angle weighting factor for a given row.
             
-        Returns:
-            The combined rigidity and pitch angle weighting factor
-        """
-        return momentaDist(row["angleBetweenIMFinRadians"], row["Rigidity"])
+            Args:
+                row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
+                
+            Returns:
+                The combined rigidity and pitch angle weighting factor
+            """
+            return momentaDist(row["angleBetweenIMFinRadians"], row["Rigidity"])
 
-    print("calculating pitch angle weighting factors...")
-    new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF)(pitchAngleFunctionToUse, axis=1)
+        print("calculating pitch angle weighting factors...")
+        new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF)(pitchAngleFunctionToUse, axis=1)
 
-    new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
+        new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
 
-    print("calculating rigidity weighting factors...")
-    new_asymptotic_direction_DF["RigidityWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF["Rigidity"])(momentaDist.getRigiditySpectrum())
+        print("calculating rigidity weighting factors...")
+        new_asymptotic_direction_DF["RigidityWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF["Rigidity"])(momentaDist.getRigiditySpectrum())
 
-    print("calculating rigidity + pitch combined weighting factors...")
-    all_weighted_asymp_dirs = get_apply_method(new_asymptotic_direction_DF)(fullRigidityPitchWeightingFactorFunctionToUse, axis=1)
-    new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = all_weighted_asymp_dirs * (new_asymptotic_direction_DF["Filter"] == 1)
+        print("calculating rigidity + pitch combined weighting factors...")
+        all_weighted_asymp_dirs = get_apply_method(new_asymptotic_direction_DF)(fullRigidityPitchWeightingFactorFunctionToUse, axis=1)
+        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = all_weighted_asymp_dirs * (new_asymptotic_direction_DF["Filter"] == 1)
+    else:
+        # For isotropic fast mode, set pitch angle factor to 1 and full rigidity pitch factor to rigidity factor
+        print("using isotropic fast mode: setting pitch angle weighting factors to 1")
+        new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = 1.0
+        new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
+        
+        print("calculating rigidity weighting factors...")
+        new_asymptotic_direction_DF["RigidityWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF["Rigidity"])(momentaDist.getRigiditySpectrum())
+        
+        print("setting full rigidity pitch weighting factors equal to rigidity weighting factors...")
+        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = new_asymptotic_direction_DF["RigidityWeightingFactor"] * (new_asymptotic_direction_DF["Filter"] == 1)
     
     print("calculating energy + pitch combined weighting factors...")
     print("converting rigidities to energies...")

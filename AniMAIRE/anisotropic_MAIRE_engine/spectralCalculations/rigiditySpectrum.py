@@ -62,7 +62,7 @@ def common_modified_power_law_split_evaluate(J0: float, gamma: float, deltaGamma
     mod = spec_index_modification_split(deltaGamma, P)
     return J0 * (P ** (-(gamma + mod))) / (100 ** 2)
 
-class RigiditySpectrum(Distribution[float]):
+class RigiditySpectrum(Distribution):
     """
     Base class for rigidity spectra.
     """

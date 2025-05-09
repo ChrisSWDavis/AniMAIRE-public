@@ -1,12 +1,11 @@
+import numpy as np
+import pandas as pd
 from AniMAIRE.anisotropic_MAIRE_engine.spectralCalculations.momentaDistribution import momentaDistribution
 from AniMAIRE.anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import pitchAngleDistribution
 from AniMAIRE.anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import rigiditySpectrum
 from AniMAIRE.dose_plotting import plot_dose_map, plot_on_spherical_globe
 
-
 import matplotlib.pyplot as plt
-import pandas as pd
-
 
 import logging
 
@@ -106,6 +105,8 @@ class DoseRateFrame(pd.DataFrame):
                 **(other.run_parameters or {})
             } if self.run_parameters or getattr(other, 'run_parameters', None) else self.run_parameters
         )
+
+        combined.dose_components = [self, other]
         
         return combined
         
@@ -132,6 +133,98 @@ class DoseRateFrame(pd.DataFrame):
             
         # For other types, try to use the regular addition method
         return self.__add__(other)
+    
+    def multiply(self, factor):
+        """
+        Multiply all dose rate values by a scalar factor, array, or another DoseRateFrame, 
+        preserving latitude, longitude, and altitude.
+        
+        Parameters:
+        -----------
+        factor : float, int, array-like, or DoseRateFrame
+            The scalar factor, array of values, or DoseRateFrame to multiply the dose rates by.
+            If array-like, must have the same length as the dataframe.
+            
+        Returns:
+        --------
+        DoseRateFrame
+            A new DoseRateFrame with scaled dose rate values
+        """
+        # Create a copy of the dataframe
+        result = self.copy()
+        
+        # Columns to preserve (not multiply)
+        preserve_columns = ['latitude', 'longitude', 'altitude (km)']
+        
+        if isinstance(factor, DoseRateFrame):
+            # Check if the frames have compatible coordinates
+            for col in preserve_columns:
+                if col in self.columns and col in factor.columns:
+                    if not set(self[col].values) == set(factor[col].values):
+                        raise ValueError(f"Cannot multiply DoseRateFrames with different {col} values")
+            
+            # Merge the dataframes on coordinate columns
+            merge_cols = [col for col in preserve_columns if col in self.columns and col in factor.columns]
+            if not merge_cols:
+                raise ValueError("No coordinate columns found for multiplication")
+                
+            merged = pd.merge(self, factor, on=merge_cols, suffixes=('', '_other'))
+            result = self.copy()
+            
+            # Multiply corresponding numeric columns
+            for col in self.columns:
+                if pd.api.types.is_numeric_dtype(self[col]) and col not in preserve_columns:
+                    if col in factor.columns:
+                        result[col] = merged[col] * merged[f"{col}"]
+            
+            # Create a new DoseRateFrame with the multiplied data
+            multiplied = DoseRateFrame(
+                data=result,
+                timestamp=self.timestamp,
+                particle_distributions=self.particle_distributions,
+                run_parameters={
+                    **(self.run_parameters or {}),
+                    **(factor.run_parameters or {})
+                } if self.run_parameters or getattr(factor, 'run_parameters', None) else self.run_parameters
+            )
+            
+            return multiplied
+            
+        elif isinstance(factor, (int, float)):
+            # Multiply all numeric columns by the scalar factor except for preserved columns
+            for col in self.columns:
+                if pd.api.types.is_numeric_dtype(self[col]) and col not in preserve_columns:
+                    result[col] = self[col] * factor
+            
+            # Create a new DoseRateFrame with the scaled data
+            scaled = DoseRateFrame(
+                data=result,
+                timestamp=self.timestamp,
+                particle_distributions=self.particle_distributions,
+                run_parameters=self.run_parameters
+            )
+            
+            return scaled
+        elif hasattr(factor, '__len__') and len(factor) == len(self):
+            # Handle array-like input with same length as dataframe
+            factor_array = np.asarray(factor)
+            
+            # Multiply all numeric columns by the corresponding factor in the array
+            for col in self.columns:
+                if pd.api.types.is_numeric_dtype(self[col]) and col not in preserve_columns:
+                    result[col] = self[col] * factor_array
+            
+            # Create a new DoseRateFrame with the scaled data
+            scaled = DoseRateFrame(
+                data=result,
+                timestamp=self.timestamp,
+                particle_distributions=self.particle_distributions,
+                run_parameters=self.run_parameters
+            )
+            
+            return scaled
+        else:
+            raise TypeError(f"Multiplication is only supported with numeric types, arrays of length {len(self)}, or DoseRateFrame, got {type(factor)}")
 
     def get_altitudes(self):
         """

@@ -31,7 +31,7 @@ def gaussian_beeck_pad_evaluate(pitch_angle_radians: float, norm_factor: float, 
     denominator = A - (0.5 * (A - B) * (1 - cos_pa))
     return norm_factor * np.exp(numerator / denominator)
 
-class PitchAngleDistribution(Distribution[float]):
+class PitchAngleDistribution(Distribution):
     """
     Base class for pitch angle distributions.
     """
@@ -192,7 +192,8 @@ class IsotropicPitchAngleDistribution(PitchAngleDistribution):
     Isotropic pitch angle distribution.
     """
 
-    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
+    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0, 
+                 use_fast_calculation: bool = False):
         """
         Initialize the isotropic pitch angle distribution.
         
@@ -201,8 +202,11 @@ class IsotropicPitchAngleDistribution(PitchAngleDistribution):
             Reference latitude in GSM coordinates.
         - reference_longitude_in_GSM: float
             Reference longitude in GSM coordinates.
+        - use_fast_calculation: bool
+            Whether to use fast calculation method instead of accurate calculation.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
+        self.use_fast_calculation = use_fast_calculation
     
     def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
