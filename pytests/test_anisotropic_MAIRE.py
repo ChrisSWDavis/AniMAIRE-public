@@ -123,6 +123,10 @@ def test_Common_spec_max_asymp_dir():
 #                         date_and_time=dt.datetime(year=2000,month=7,day=14,hour=10,minute=45,second=0))
 #     assert result is not None
 
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS,
+    reason="Skipping optional test. Set the environment variable RUN_OPTIONAL_TESTS to run this test."
+)
 def test_run_from_spectra_two_locations():
     expected_output_doses = [
         [-28.3, -92.7, 0.0, 1566042.081461501, 1584829.7906373749, 2533601.13864571, 20720.5264863163, 12792.83414833093, 8617.837255319431, 4.391961356198295e-09, 0.00043919613561982954],
@@ -180,7 +184,10 @@ def test_run_from_spectra_two_locations():
 #                                             altitudes_in_km=np.append(np.array(range(0,13)) * 0.3048,11.28))
 #     assert result is not None
 
-
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS,
+    reason="Skipping optional test. Set the environment variable RUN_OPTIONAL_TESTS to run this test."
+)
 def test_Common_spec_max_asymp_dir():
     array_of_lats_and_longs = np.array([[65.0,25.0],[-35.0,78.0]])
     array_of_zeniths_and_azimuths = np.array([(i,j) for i in np.linspace(0,20,5) for j in np.linspace(0,360,5)])
@@ -450,6 +457,10 @@ def test_anisotropic_dose_rates():
     assert np.allclose(rounded_actual_values, expected_anisotropic_dose_rates, rtol=1e-3)
 
 # Test running AniMAIRE using a precomputed OTSO asymptotic direction file
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS,
+    reason="Skipping optional test. Set the environment variable RUN_OPTIONAL_TESTS to run this test."
+)
 def test_run_from_OTSO_asymp_file(tmp_path):
     import os
     import pandas as pd
