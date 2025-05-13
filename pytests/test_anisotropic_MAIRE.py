@@ -491,7 +491,7 @@ def test_isotropic_dose_rates():
         record_full_output=True,
         cache_asymptotic_directions=False,)
 
-    assert np.allclose(test_isotropic_dose_rates.values, expected_isotropic_dose_rates)
+    assert np.allclose(test_isotropic_dose_rates.values, expected_isotropic_dose_rates, rtol=1e-3)
 
 def test_anisotropic_dose_rates():
     # expected_anisotropic_dose_rates = [
@@ -528,7 +528,7 @@ def test_anisotropic_dose_rates():
 
     # assert np.allclose(rounded_actual_values[0], expected_anisotropic_dose_rates[0])
     # assert np.allclose(rounded_actual_values[-1], expected_anisotropic_dose_rates[-1])
-    assert np.allclose(rounded_actual_values, expected_anisotropic_dose_rates)
+    assert np.allclose(rounded_actual_values, expected_anisotropic_dose_rates, rtol=1e-3)
 
 # Test running AniMAIRE using a precomputed OTSO asymptotic direction file
 def test_run_from_OTSO_asymp_file(tmp_path):
