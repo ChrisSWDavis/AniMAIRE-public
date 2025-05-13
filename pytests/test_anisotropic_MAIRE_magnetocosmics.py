@@ -351,6 +351,7 @@ def test_isotropic_dose_rates():
         date_and_time=dt.datetime(2006, 12, 13, 3, 0),
         use_OTSOpy=False,
         array_of_lats_and_longs=[[65.0,25.0]],
+        record_full_output=True,
         cache_asymptotic_directions=False,)
 
     rounded_actual_values = [[custom_round(value) for value in sublist] for sublist in test_isotropic_dose_rates.values.tolist()]
