@@ -22,7 +22,7 @@ def test_generalEngineInstance(sample_particle_distribution):
         reference_longitude=45.0,
         array_of_lats_and_longs=np.array([[0.0, 0.0], [10.0, 10.0]]),
         cache_magnetocosmics_runs=False,
-        generate_NM_count_rates=False
+        generate_NM_count_rates=False,
     )
     
     assert engine.Kp_index == 3
