@@ -427,6 +427,7 @@ def run_maireplus_spectrum(
         Kp_index=kp_index,
         proton_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
         alpha_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
+        **kwargs
     )
     
     # Run AniMAIRE with the spectrum

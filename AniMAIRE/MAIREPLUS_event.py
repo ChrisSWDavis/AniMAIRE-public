@@ -1,4 +1,5 @@
 import re
+import copy
 from AniMAIRE.AniMAIRE import run_maireplus_spectrum
 from AniMAIRE.AniMAIRE_event import BaseAniMAIREEvent, memory
 from AniMAIRE.DoseRateFrame import DoseRateFrame
@@ -9,7 +10,7 @@ import pandas as pd
 
 
 import datetime as dt
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Union, List
 
 # Add a subclass for MAIREPLUS spectrum based events
 # Define a cached version of the MAIREPLUS run function
@@ -255,9 +256,18 @@ class NeutronMonitorData(pd.DataFrame):
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # Store original values and replace negative/zero percentages with 0.0
+        if 'percentage_increase' in df.columns:
+            df['original_percentage_increase'] = df['percentage_increase']
+            df.loc[df['percentage_increase'] <= 0.0, 'percentage_increase'] = 0.0
+            
+        if 'corrected_percentage_increase' in df.columns:
+            df['original_corrected_percentage_increase'] = df['corrected_percentage_increase']
+            df.loc[df['corrected_percentage_increase'] <= 0.0, 'corrected_percentage_increase'] = 0.0
         
         # Return as NeutronMonitorData instance
-        return cls(df)
+        return cls(copy.deepcopy(df))
 
     def find_exceeding_percentage(self, percentage=8):
         """
@@ -858,6 +868,418 @@ class MAIREPLUS_event(BaseAniMAIREEvent):
         self.run_kwargs = kwargs
         # -----------------------------------------------------------------------
 
+    def __repr__(self) -> str:
+        """
+        Return enhanced string representation showing neutron monitor details.
+        
+        Returns:
+            str: Detailed representation of the MAIREPLUS_event with monitor information
+        """
+        # Get the base representation from parent class
+        base_repr = super().__repr__()
+        
+        # Add MAIREPLUS-specific information
+        enhancement_lines = []
+        
+        # Add event count information
+        event_count = getattr(self, '_count', 1)
+        enhancement_lines.append(f"Event count: {event_count}")
+        
+        # Add detailed neutron monitor information
+        monitor_details = self._get_detailed_monitor_info()
+        if monitor_details:
+            enhancement_lines.extend(monitor_details)
+        
+        # Add percentage increase ranges if available
+        if hasattr(self, 'params'):
+            for param in ['neutron_monitor_1_percentage_increase', 'neutron_monitor_2_percentage_increase', 'normalisation_monitor_percentage_increase']:
+                if param in self.params:
+                    values = self.params[param]
+                    if isinstance(values, list) and len(values) > 0:
+                        if len(values) == 1:
+                            enhancement_lines.append(f"{param.replace('_', ' ').title()}: {values[0]:.2f}%")
+                        else:
+                            min_val, max_val = min(values), max(values)
+                            enhancement_lines.append(f"{param.replace('_', ' ').title()}: {min_val:.2f}% to {max_val:.2f}%")
+        
+        # Add OULU baseline information
+        if hasattr(self, 'params') and 'OULU_gcr_count_rate_in_seconds' in self.params:
+            baseline = self.params['OULU_gcr_count_rate_in_seconds']
+            if isinstance(baseline, list) and len(baseline) > 0:
+                baseline_val = baseline[0]
+                enhancement_lines.append(f"OULU baseline rate: {baseline_val:.2f} counts/sec")
+        
+        # Add spectral information
+        spectral_details = self._get_spectral_details()
+        if spectral_details:
+            enhancement_lines.extend(spectral_details)
+        
+        # Combine base representation with enhancements
+        if enhancement_lines:
+            enhancement_text = "\n".join(f"  • {line}" for line in enhancement_lines)
+            return f"{base_repr}\n\nMAIREPLUS Event Details:\n{enhancement_text}"
+        else:
+            return base_repr
+
+    def _repr_html_(self) -> str:
+        """
+        Return enhanced HTML representation for Jupyter notebook display.
+        
+        Returns:
+            str: HTML representation with detailed neutron monitor information
+        """
+        # Get basic event information
+        class_name = self.__class__.__name__
+        n_timestamps = len(self.dose_rates) if hasattr(self, 'dose_rates') and self.dose_rates else 0
+        event_count = getattr(self, '_count', 1)
+        
+        timestamp_range = "N/A"
+        dose_types = []
+        if n_timestamps > 0:
+            timestamps = sorted(self.dose_rates.keys())
+            timestamp_range = f"{timestamps[0]} to {timestamps[-1]}"
+            first_frame = next(iter(self.dose_rates.values()))
+            if first_frame is not None:
+                expected_types = ['edose', 'adose', 'dosee', 'tn1', 'tn2', 'tn3', 'SEU', 'SEL']
+                dose_types = [col for col in expected_types if col in first_frame.columns]
+                dose_types += [col for col in first_frame.columns 
+                              if any(col.startswith(b+' ') for b in ['SEU', 'SEL'])]
+        
+        altitudes = []
+        if n_timestamps > 0:
+            all_alts = set()
+            for frame in self.dose_rates.values():
+                all_alts.update(frame.get_altitudes())
+            altitudes = sorted(all_alts)
+        
+        # Start building HTML
+        html = f"""
+        <div style="background-color:#f8f9fa;padding:15px;border-radius:6px;border:1px solid #ddd;margin:10px 0;">
+            <h3 style="margin-top:0;color:#2c3e50;border-bottom:2px solid #3498db;padding-bottom:5px;">
+                🚀 {class_name}
+            </h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+                <div>
+                    <h4 style="color:#2980b9;margin-bottom:8px;">📊 Event Overview</h4>
+                    <table style="border-collapse:collapse;width:100%;">
+                        <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Event count</b></td><td style="padding:4px;border:1px solid #ddd;">{event_count}</td></tr>
+                        <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Timestamps</b></td><td style="padding:4px;border:1px solid #ddd;">{n_timestamps}</td></tr>
+                        <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Time range</b></td><td style="padding:4px;border:1px solid #ddd;">{timestamp_range}</td></tr>
+                    </table>
+                </div>
+                <div>
+                    <h4 style="color:#2980b9;margin-bottom:8px;">🛰️ Neutron Monitor Setup</h4>
+        """
+        
+        # Add detailed monitor information
+        monitor_details = self._get_detailed_monitor_info_for_html()
+        if monitor_details:
+            html += monitor_details
+        else:
+            html += "<p style='font-style:italic;color:#7f8c8d;'>No monitor details available</p>"
+        
+        html += """
+                </div>
+            </div>
+        """
+        
+        # Add percentage increase information if available
+        if hasattr(self, 'params'):
+            html += """
+            <div style="margin-top:15px;">
+                <h4 style="color:#2980b9;margin-bottom:8px;">📈 Percentage Increases</h4>
+                <table style="border-collapse:collapse;width:100%;">
+            """
+            
+            monitor_labels = {
+                'neutron_monitor_1_percentage_increase': 'Primary Monitor',
+                'neutron_monitor_2_percentage_increase': 'Secondary Monitor', 
+                'normalisation_monitor_percentage_increase': 'Normalisation Monitor'
+            }
+            
+            for param, label in monitor_labels.items():
+                if param in self.params:
+                    values = self.params[param]
+                    if isinstance(values, list) and len(values) > 0:
+                        if len(values) == 1:
+                            value_display = f"{values[0]:.2f}%"
+                        else:
+                            min_val, max_val = min(values), max(values)
+                            value_display = f"{min_val:.2f}% to {max_val:.2f}%"
+                        html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;width:40%;'><b>{label}</b></td><td style='padding:4px;border:1px solid #ddd;'>{value_display}</td></tr>"
+            
+            # Add OULU baseline
+            if 'OULU_gcr_count_rate_in_seconds' in self.params:
+                baseline = self.params['OULU_gcr_count_rate_in_seconds']
+                if isinstance(baseline, list) and len(baseline) > 0:
+                    baseline_val = baseline[0]
+                    html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>OULU Baseline Rate</b></td><td style='padding:4px;border:1px solid #ddd;'>{baseline_val:.2f} counts/sec</td></tr>"
+            
+            html += "</table></div>"
+        
+        # Add spectral information section
+        spectral_html = self._get_spectral_details_for_html()
+        if spectral_html:
+            html += spectral_html
+        
+        # Add available data section
+        html += """
+            <div style="margin-top:15px;">
+                <h4 style="color:#2980b9;margin-bottom:8px;">📋 Available Data</h4>
+        """
+        
+        if altitudes:
+            html += "<p><b>Altitudes:</b> " + ", ".join([f"{alt:.2f} km" for alt in altitudes]) + "</p>"
+            
+        if dose_types:
+            html += "<p><b>Dose types:</b> " + ", ".join(dose_types) + "</p>"
+        
+        # Add help text
+        html += """
+                <p style="margin-top:10px;font-size:0.9em;color:#7f8c8d;">
+                    <i>💡 Available methods: run_AniMAIRE(), plot_map_at_time(), create_gle_map_animation(), etc.</i>
+                </p>
+            </div>
+        </div>
+        """
+        return html
+
+    def _get_detailed_monitor_info(self) -> List[str]:
+        """
+        Get detailed neutron monitor information for text representation.
+        
+        Returns:
+            List[str]: List of formatted monitor information strings
+        """
+        details = []
+        
+        # Try to get information from nm_set attribute (if created from files)
+        if hasattr(self, 'nm_set'):
+            try:
+                nm_set = self.nm_set
+                primary = nm_set.get_primary()
+                secondary = nm_set.get_secondary()
+                normalisation = nm_set.get_normalisation()
+                
+                details.append(f"Primary Monitor: {primary.get_station_name()} at {primary.get_location()}")
+                details.append(f"Secondary Monitor: {secondary.get_station_name()} at {secondary.get_location()}")
+                details.append(f"Normalisation Monitor: {normalisation.get_station_name()} at {normalisation.get_location()}")
+                return details
+            except Exception:
+                pass
+        
+        # Fallback to location information from parameters
+        if hasattr(self, 'params') or hasattr(self, 'run_kwargs'):
+            params = getattr(self, 'params', {})
+            run_kwargs = getattr(self, 'run_kwargs', {})
+            
+            monitor_info = [
+                ('Primary', 'neutron_monitor_1_location'),
+                ('Secondary', 'neutron_monitor_2_location'),
+                ('Normalisation', 'normalisation_monitor_location')
+            ]
+            
+            for label, key in monitor_info:
+                location = None
+                if key in params:
+                    location = params[key][0] if isinstance(params[key], list) else params[key]
+                elif key in run_kwargs:
+                    location = run_kwargs[key]
+                
+                if location:
+                    if isinstance(location, (list, tuple)) and len(location) >= 2:
+                        details.append(f"{label} Monitor: Location ({location[0]:.2f}°, {location[1]:.2f}°)")
+                    else:
+                        details.append(f"{label} Monitor: {location}")
+        
+        return details
+
+    def _get_detailed_monitor_info_for_html(self) -> str:
+        """
+        Get detailed neutron monitor information formatted as HTML.
+        
+        Returns:
+            str: HTML formatted monitor information
+        """
+        # Try to get information from nm_set attribute (if created from files)
+        if hasattr(self, 'nm_set'):
+            try:
+                nm_set = self.nm_set
+                primary = nm_set.get_primary()
+                secondary = nm_set.get_secondary()
+                normalisation = nm_set.get_normalisation()
+                
+                html = """
+                <table style="border-collapse:collapse;width:100%;">
+                    <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Primary</b></td><td style="padding:4px;border:1px solid #ddd;">{} at ({:.2f}°, {:.2f}°)</td></tr>
+                    <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Secondary</b></td><td style="padding:4px;border:1px solid #ddd;">{} at ({:.2f}°, {:.2f}°)</td></tr>
+                    <tr><td style="padding:4px;border:1px solid #ddd;background:#ecf0f1;"><b>Normalisation</b></td><td style="padding:4px;border:1px solid #ddd;">{} at ({:.2f}°, {:.2f}°)</td></tr>
+                </table>
+                """.format(
+                    primary.get_station_name(), primary.get_location()[0], primary.get_location()[1],
+                    secondary.get_station_name(), secondary.get_location()[0], secondary.get_location()[1],
+                    normalisation.get_station_name(), normalisation.get_location()[0], normalisation.get_location()[1]
+                )
+                return html
+            except Exception:
+                pass
+        
+        # Fallback to location information from parameters
+        if hasattr(self, 'params') or hasattr(self, 'run_kwargs'):
+            params = getattr(self, 'params', {})
+            run_kwargs = getattr(self, 'run_kwargs', {})
+            
+            html = "<table style='border-collapse:collapse;width:100%;'>"
+            
+            monitor_info = [
+                ('Primary', 'neutron_monitor_1_location'),
+                ('Secondary', 'neutron_monitor_2_location'),
+                ('Normalisation', 'normalisation_monitor_location')
+            ]
+            
+            for label, key in monitor_info:
+                location = None
+                if key in params:
+                    location = params[key][0] if isinstance(params[key], list) else params[key]
+                elif key in run_kwargs:
+                    location = run_kwargs[key]
+                
+                if location:
+                    if isinstance(location, (list, tuple)) and len(location) >= 2:
+                        html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>{label}</b></td><td style='padding:4px;border:1px solid #ddd;'>({location[0]:.2f}°, {location[1]:.2f}°)</td></tr>"
+                    else:
+                        html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>{label}</b></td><td style='padding:4px;border:1px solid #ddd;'>{location}</td></tr>"
+            
+            html += "</table>"
+            return html
+        
+        return ""
+
+    def _get_spectral_details(self) -> List[str]:
+        """
+        Get spectral information for text representation.
+        
+        Returns:
+            List[str]: List of formatted spectral information strings
+        """
+        details = []
+        
+        # Try to get spectral summary from parent class
+        try:
+            spectra_summary = self.summarize_spectra()
+            if spectra_summary:
+                details.append(f"Spectral model: {spectra_summary.get('spectrum_type', 'MAIREPLUS')}")
+                
+                if 'particle_types' in spectra_summary:
+                    particle_info = spectra_summary['particle_types']
+                    if isinstance(particle_info, dict):
+                        particles = ", ".join([f"{k} (Z={v})" for k, v in particle_info.items()])
+                        details.append(f"Particle types: {particles}")
+                    elif isinstance(particle_info, list):
+                        details.append(f"Particle types: {', '.join(map(str, particle_info))}")
+                
+                if 'rigidity_range' in spectra_summary:
+                    rig_range = spectra_summary['rigidity_range']
+                    if isinstance(rig_range, (list, tuple)) and len(rig_range) >= 2:
+                        details.append(f"Rigidity range: {rig_range[0]:.2f} to {rig_range[1]:.2f} GV")
+                
+                if 'flux_range' in spectra_summary:
+                    flux_range = spectra_summary['flux_range']
+                    if isinstance(flux_range, (list, tuple)) and len(flux_range) >= 2:
+                        details.append(f"Flux range: {flux_range[0]:.2e} to {flux_range[1]:.2e} particles/m²/sr/s/GV")
+        except Exception:
+            # If summarize_spectra fails, try to extract basic info
+            pass
+        
+        # Add information about spectrum generation method
+        if hasattr(self, 'dose_rates') and self.dose_rates:
+            first_frame = next(iter(self.dose_rates.values()))
+            if hasattr(first_frame, 'particle_distributions'):
+                n_particles = len(first_frame.particle_distributions) if first_frame.particle_distributions else 0
+                if n_particles > 0:
+                    details.append(f"Particle distributions: {n_particles}")
+                    
+                    # Try to get spectrum type info
+                    try:
+                        first_dist = first_frame.particle_distributions[0]
+                        if hasattr(first_dist, 'momentum_distribution') and \
+                           hasattr(first_dist.momentum_distribution, 'rigidity_spectrum'):
+                            spectrum_obj = first_dist.momentum_distribution.rigidity_spectrum
+                            spectrum_class = spectrum_obj.__class__.__name__
+                            details.append(f"Spectrum type: {spectrum_class}")
+                    except Exception:
+                        pass
+        
+        return details
+
+    def _get_spectral_details_for_html(self) -> str:
+        """
+        Get spectral information formatted as HTML.
+        
+        Returns:
+            str: HTML formatted spectral information
+        """
+        try:
+            spectra_summary = self.summarize_spectra()
+            if not spectra_summary:
+                return ""
+        except Exception:
+            return ""
+        
+        html = """
+        <div style="margin-top:15px;">
+            <h4 style="color:#2980b9;margin-bottom:8px;">🌟 Spectral Information</h4>
+            <table style="border-collapse:collapse;width:100%;">
+        """
+        
+        # Add spectrum type
+        spectrum_type = spectra_summary.get('spectrum_type', 'MAIREPLUS')
+        html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;width:40%;'><b>Spectrum Model</b></td><td style='padding:4px;border:1px solid #ddd;'>{spectrum_type}</td></tr>"
+        
+        # Add particle types
+        if 'particle_types' in spectra_summary:
+            particle_info = spectra_summary['particle_types']
+            if isinstance(particle_info, dict):
+                particles = ", ".join([f"{k} (Z={v})" for k, v in particle_info.items()])
+                html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Particle Types</b></td><td style='padding:4px;border:1px solid #ddd;'>{particles}</td></tr>"
+            elif isinstance(particle_info, list):
+                particles_str = ', '.join(map(str, particle_info))
+                html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Particle Types</b></td><td style='padding:4px;border:1px solid #ddd;'>{particles_str}</td></tr>"
+        
+        # Add rigidity range
+        if 'rigidity_range' in spectra_summary:
+            rig_range = spectra_summary['rigidity_range']
+            if isinstance(rig_range, (list, tuple)) and len(rig_range) >= 2:
+                html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Rigidity Range</b></td><td style='padding:4px;border:1px solid #ddd;'>{rig_range[0]:.2f} to {rig_range[1]:.2f} GV</td></tr>"
+        
+        # Add flux range
+        if 'flux_range' in spectra_summary:
+            flux_range = spectra_summary['flux_range']
+            if isinstance(flux_range, (list, tuple)) and len(flux_range) >= 2:
+                html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Flux Range</b></td><td style='padding:4px;border:1px solid #ddd;'>{flux_range[0]:.2e} to {flux_range[1]:.2e} particles/m²/sr/s/GV</td></tr>"
+        
+        # Add number of particle distributions
+        if hasattr(self, 'dose_rates') and self.dose_rates:
+            first_frame = next(iter(self.dose_rates.values()))
+            if hasattr(first_frame, 'particle_distributions'):
+                n_particles = len(first_frame.particle_distributions) if first_frame.particle_distributions else 0
+                if n_particles > 0:
+                    html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Particle Distributions</b></td><td style='padding:4px;border:1px solid #ddd;'>{n_particles}</td></tr>"
+                    
+                    # Try to get spectrum type info
+                    try:
+                        first_dist = first_frame.particle_distributions[0]
+                        if hasattr(first_dist, 'momentum_distribution') and \
+                           hasattr(first_dist.momentum_distribution, 'rigidity_spectrum'):
+                            spectrum_obj = first_dist.momentum_distribution.rigidity_spectrum
+                            spectrum_class = spectrum_obj.__class__.__name__
+                            html += f"<tr><td style='padding:4px;border:1px solid #ddd;background:#ecf0f1;'><b>Spectrum Class</b></td><td style='padding:4px;border:1px solid #ddd;'>{spectrum_class}</td></tr>"
+                    except Exception:
+                        pass
+        
+        html += "</table></div>"
+        return html
+
     def run_AniMAIRE(self, use_cache: bool = True, **kwargs: Any) -> Dict[dt.datetime, DoseRateFrame]:
         """Run MAIREPLUS-based AniMAIRE events (vectorized) with optional caching."""
         # Clear any prior results and prepare the component list
@@ -963,9 +1385,12 @@ class MAIREPLUS_event(BaseAniMAIREEvent):
 
         # Create event instance
         event = cls(
-            neutron_monitor_1_percentage_increase=primary_filtered['percentage_increase'].values,
-            neutron_monitor_2_percentage_increase=secondary_filtered['percentage_increase'].values,
-            normalisation_monitor_percentage_increase=normalisation_filtered['percentage_increase'].values,
+            # neutron_monitor_1_percentage_increase=primary_filtered['percentage_increase'].values,
+            # neutron_monitor_2_percentage_increase=secondary_filtered['percentage_increase'].values,
+            # normalisation_monitor_percentage_increase=normalisation_filtered['percentage_increase'].values,
+            neutron_monitor_1_percentage_increase=primary_filtered['corrected_percentage_increase'].values,
+            neutron_monitor_2_percentage_increase=secondary_filtered['corrected_percentage_increase'].values,
+            normalisation_monitor_percentage_increase=normalisation_filtered['corrected_percentage_increase'].values,
             OULU_gcr_count_rate_in_seconds=OULU_gcr_count_rate,
             datetime=primary_filtered['timestamp'].values,
             kp_index=kp_index,

@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 
 import logging
 
+import copy
+
 class DoseRateFrame(pd.DataFrame):
     """
     A class for containing and manipulating a single dose rate dataframe from a specific timestamp.
@@ -75,10 +77,7 @@ class DoseRateFrame(pd.DataFrame):
         coordinate_cols = ['latitude', 'longitude', 'altitude (km)']  # These should match, not add
         
         # Create a copy of self for the result
-        result = self.copy()
-        
-        # Create a merged DataFrame on coordinate columns
-        merged = pd.merge(self, other, on=coordinate_cols, how='inner', suffixes=('', '_other'))
+        result = copy.deepcopy(self)
         
         # Add numeric columns that exist in both frames
         for col in numeric_cols:
@@ -87,10 +86,15 @@ class DoseRateFrame(pd.DataFrame):
                 
             if col in other.columns:
                 other_col = col
-                result[col] = merged[col] + merged[other_col]
+                if self[col].isna().any() or other[other_col].isna().any():
+                    logging.warning(f"NaN values found in column {col} or {other_col}. Setting NaN values to 0.0")
+                
+                #print(self[col].loc[0],other[other_col].loc[0])
+                result[col] = self[col].fillna(0.0) + other[other_col].fillna(0.0)
+                #print(result[col].loc[0])
         
         # Create a new DoseRateFrame with the combined data
-        combined = DoseRateFrame(
+        combined = copy.deepcopy(DoseRateFrame(
             data=result,
             timestamp=self.timestamp,  # Keep the timestamp of the first frame
             # Combine particle distributions if both have them
@@ -104,11 +108,11 @@ class DoseRateFrame(pd.DataFrame):
                 **(self.run_parameters or {}),
                 **(other.run_parameters or {})
             } if self.run_parameters or getattr(other, 'run_parameters', None) else self.run_parameters
-        )
+        ))
 
-        combined.dose_components = [self, other]
+        combined.dose_components = copy.deepcopy([self, other])
         
-        return combined
+        return copy.deepcopy(combined)
         
     def __radd__(self, other):
         """
