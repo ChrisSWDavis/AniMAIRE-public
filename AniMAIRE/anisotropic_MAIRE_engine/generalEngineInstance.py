@@ -9,6 +9,7 @@ from typing import Optional
 from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools
 from .AsymptoticDirectionProcessing import generate_asymp_dir_DF
+from .otso_planet_processing import create_and_convert_full_planet
 import os
 
 # Initialize tqdm for progress bars
@@ -31,6 +32,7 @@ class generalEngineInstance:
                  list_of_altitudes_km: list[float], 
                  Kp_index: int, 
                  date_and_time: dt.datetime,
+                 use_OTSOpy: bool = True,
                  reference_latitude: float = 0.0,
                  reference_longitude: float = 45.0,
                  array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
@@ -69,6 +71,7 @@ class generalEngineInstance:
         self.list_of_altitudes_km = list_of_altitudes_km
         self.Kp_index = Kp_index
         self.date_and_time = date_and_time
+        self.use_OTSOpy = use_OTSOpy
         self.reference_latitude = reference_latitude
         self.reference_longitude = reference_longitude
         self.array_of_lats_and_longs = array_of_lats_and_longs
@@ -121,6 +124,11 @@ class generalEngineInstance:
             Whether to use the default 9 zeniths and azimuths.
         - **magneto_kwargs: additional keyword arguments for Magnetocosmics.
         """
+        if self.use_OTSOpy:
+            asymptotic_directions_function = create_and_convert_full_planet
+        else:
+            asymptotic_directions_function = AsympDirsTools.get_magcos_asymp_dirs
+
         if self.asymp_dir_file:
             raw_asymp_df = self.get_raw_asymp_DF_from_file(self.asymp_dir_file)
         else:
@@ -139,7 +147,7 @@ class generalEngineInstance:
                     [32.0, 180.0],
                     [32.0, 270.0],
                 ]
-                raw_asymp_df = AsympDirsTools.get_magcos_asymp_dirs(
+                raw_asymp_df = asymptotic_directions_function(
                     array_of_lats_and_longs=self.array_of_lats_and_longs,
                     KpIndex=self.Kp_index,
                     dateAndTime=self.date_and_time,
@@ -149,7 +157,7 @@ class generalEngineInstance:
                     **magneto_kwargs,
                 )
             else:
-                raw_asymp_df = AsympDirsTools.get_magcos_asymp_dirs(
+                raw_asymp_df = asymptotic_directions_function(
                     array_of_lats_and_longs=self.array_of_lats_and_longs,
                     KpIndex=self.Kp_index,
                     dateAndTime=self.date_and_time,

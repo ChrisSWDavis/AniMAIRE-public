@@ -22,9 +22,10 @@ def run_from_spectra(
         Kp_index: Optional[int] = None,
         date_and_time: Optional[dt.datetime] = None,
         array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
-        cache_magnetocosmics_run: bool = True,
+        cache_asymptotic_directions: bool = True,
         generate_NM_count_rates: bool = False,
         use_default_9_zeniths_azimuths: bool = False,
+        use_OTSOpy: bool = True,
         asymp_dir_file: Optional[str] = None,
         record_full_output: bool = False,
         **mag_cos_kwargs,
@@ -55,12 +56,16 @@ def run_from_spectra(
         Date and time for the simulation.
     - array_of_lats_and_longs: array, optional
         Array of latitudes and longitudes to perform calculations for.
-    - cache_magnetocosmics_run: bool, optional
-        Whether to cache the results of MAGNETOCOSMICS simulations.
+    - cache_asymptotic_directions: bool, optional
+        Whether to cache the results of asymptotic direction calculations.
     - generate_NM_count_rates: bool, optional
         Whether to generate neutron monitor count rates.
     - use_default_9_zeniths_azimuths: bool, optional
         Whether to use the mean of nine different asymptotic directions to calculate dose rates.
+    - use_OTSOpy: bool, optional
+        Whether to use OTSOpy for asymptotic direction calculations instead of MAGNETOCOSMICS.
+    - asymp_dir_file: str, optional
+        Path to a file containing pre-calculated asymptotic directions.
     - record_full_output: bool, optional
         Whether to record full output attributes.
     - **mag_cos_kwargs: additional keyword arguments
@@ -78,7 +83,6 @@ def run_from_spectra(
             Kp_index is not None or 
             array_of_lats_and_longs is not default_array_of_lats_and_longs or
             date_and_time is not None or
-            cache_magnetocosmics_run != True or
             bool(mag_cos_kwargs)):
             raise ValueError("Error: When asymp_dir_file is provided, no additional asymptotic direction parameters, Kp_index, array_of_lats_and_longs, date_and_time, cache_magnetocosmics_run, or mag_cos_kwargs should be supplied.")
 
@@ -109,10 +113,11 @@ def run_from_spectra(
                                           list_of_altitudes_km=altitudes_in_km,
                                           Kp_index=Kp_index,
                                           date_and_time=date_and_time,
+                                          use_OTSOpy=use_OTSOpy,
                                           reference_latitude=reference_pitch_angle_latitude,
                                           reference_longitude=reference_pitch_angle_longitude,
                                           array_of_lats_and_longs=array_of_lats_and_longs,
-                                          cache_magnetocosmics_runs=cache_magnetocosmics_run,
+                                          cache_magnetocosmics_runs=cache_asymptotic_directions,
                                           generate_NM_count_rates=generate_NM_count_rates,
                                           asymp_dir_file=asymp_dir_file)
     

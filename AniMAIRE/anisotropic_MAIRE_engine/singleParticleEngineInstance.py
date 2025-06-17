@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from pandarallel import pandarallel
+
 from atmosphericRadiationDoseAndFlux import doseAndFluxCalculator as DAFcalc
 from scipy.interpolate import interp1d
 from scipy.integrate import trapezoid
@@ -11,7 +11,8 @@ from .AsymptoticDirectionProcessing import acquireWeightingFactors, get_apply_me
 from .spectralCalculations.particleDistribution import particleDistribution
 import dask.dataframe as dd
 
-pandarallel.initialize(progress_bar=True)
+# from pandarallel import pandarallel
+# pandarallel.initialize(progress_bar=True)
 
 class singleParticleEngineInstance:
     """
