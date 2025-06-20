@@ -7,10 +7,62 @@ import matplotlib.pyplot as plt
 from typing import Optional, Callable, Any, List, Union
 from CosRayModifiedISO import CosRayModifiedISO
 from .utils import Distribution, SummedFunction, ScaledFunction
+import numba
 
 print("WARNING: currently unknown whether the reported spectral weighting factor should be in terms of energy or rigidity")
 
-class RigiditySpectrum(Distribution[float]):
+# Numba-optimized standalone functions that will be used by the classes
+@numba.njit(cache=True)
+def power_law_evaluate(normalisationFactor: float, spectralIndex: float, x: float) -> float:
+    """Optimized power law calculation"""
+    return normalisationFactor * (x ** spectralIndex)
+
+@numba.njit(cache=True)
+def step_function(rigidity: float, lowerLimit: float, upperLimit: float) -> float:
+    """Optimized step function calculation"""
+    if (rigidity >= lowerLimit) and (rigidity <= upperLimit):
+        return 1.0
+    else:
+        return 0.0
+
+@numba.njit(cache=True)
+def spec_index_modification(deltaGamma: float, P: float) -> float:
+    """Optimized spectral index modification calculation"""
+    return deltaGamma * (P - 1)
+
+@numba.njit(cache=True)
+def common_modified_power_law_evaluate(J0: float, gamma: float, deltaGamma: float, 
+                                      P: float, lowerLimit: float, upperLimit: float) -> float:
+    """Optimized common modified power law calculation"""
+    mod = spec_index_modification(deltaGamma, P)
+    step = step_function(P, lowerLimit, upperLimit)
+    return J0 * step * (P ** (-(gamma + mod))) / (100 ** 2)
+
+@numba.njit(cache=True)
+def spec_index_modification_high(deltaGamma: float, P: float) -> float:
+    """Optimized high rigidity spectral index modification"""
+    return deltaGamma * (P - 1)
+
+@numba.njit(cache=True)
+def spec_index_modification_low(deltaGamma: float, P: float) -> float:
+    """Optimized low rigidity spectral index modification"""
+    return deltaGamma * P
+
+@numba.njit(cache=True)
+def spec_index_modification_split(deltaGamma: float, P: float) -> float:
+    """Optimized spectral index modification with split"""
+    if P > 1.0:
+        return spec_index_modification_high(deltaGamma, P)
+    else:
+        return spec_index_modification_low(deltaGamma, P)
+
+@numba.njit(cache=True)
+def common_modified_power_law_split_evaluate(J0: float, gamma: float, deltaGamma: float, P: float) -> float:
+    """Optimized common modified power law with split calculation"""
+    mod = spec_index_modification_split(deltaGamma, P)
+    return J0 * (P ** (-(gamma + mod))) / (100 ** 2)
+
+class RigiditySpectrum(Distribution):
     """
     Base class for rigidity spectra.
     """
@@ -99,7 +151,8 @@ class RigiditySpectrum(Distribution[float]):
             fig, ax = plt.subplots(figsize=(6, 5))
         
         rigidity_range = np.logspace(np.log10(min_rigidity), np.log10(max_rigidity), 100)  # GV
-        flux_values = [self.rigiditySpec(r) for r in rigidity_range]
+        # Optimize by converting list comprehension to vectorized numpy operation if possible
+        flux_values = np.array([self.rigiditySpec(r) for r in rigidity_range])
         ax.loglog(rigidity_range, flux_values, **kwargs)
         ax.set_xlabel('Rigidity (GV)')
         ax.set_ylabel('Flux (particles/m²/sr/s/GV)')
@@ -136,7 +189,7 @@ class PowerLawSpectrum(RigiditySpectrum):
         Returns:
             float: The value of the power law spectrum
         """
-        return self.normalisationFactor * (x ** self.spectralIndex)
+        return power_law_evaluate(self.normalisationFactor, self.spectralIndex, x)
 
 class InterpolatedInputFileSpectrum(RigiditySpectrum):
     """
@@ -165,8 +218,8 @@ class InterpolatedInputFileSpectrum(RigiditySpectrum):
             The interpolated spectrum function
         """
         inputDF = pd.read_csv(inputFileName, header=None)
-        rigidityList = inputDF[0]  # GV
-        fluxList = inputDF[1]  # p/m2/sr/s/GV
+        rigidityList = inputDF[0].to_numpy()  # GV - convert to numpy for better performance
+        fluxList = inputDF[1].to_numpy()  # p/m2/sr/s/GV
         fluxListcm2 = fluxList / (100 ** 2)
 
         rigiditySpec = scipy.interpolate.interp1d(rigidityList, fluxListcm2, kind="linear",
@@ -203,13 +256,16 @@ class DLRmodelSpectrum(RigiditySpectrum):
             self._generatedSpectrumDF = CosRayModifiedISO.getSpectrumUsingSolarModulation(solarModulationWparameter=W_parameter, atomicNumber=atomicNumber)
 
         if OULUcountRateInSeconds is not None:
-            self._generatedSpectrumDF =CosRayModifiedISO.getSpectrumUsingOULUcountRate(OULUcountRatePerSecond=OULUcountRateInSeconds, atomicNumber=atomicNumber)
+            self._generatedSpectrumDF = CosRayModifiedISO.getSpectrumUsingOULUcountRate(OULUcountRatePerSecond=OULUcountRateInSeconds, atomicNumber=atomicNumber)
 
-        interp_func = interp1d(x=self._generatedSpectrumDF["Rigidity (GV/n)"],
-                             y=self._generatedSpectrumDF["d_Flux / d_R (cm-2 s-1 sr-1 (GV/n)-1)"],
-                             kind="linear",
-                             bounds_error=False,
-                             fill_value=(0.0, 0.0))
+        # Extract numpy arrays for better performance with numba
+        x_values = self._generatedSpectrumDF["Rigidity (GV/n)"].to_numpy()
+        y_values = self._generatedSpectrumDF["d_Flux / d_R (cm-2 s-1 sr-1 (GV/n)-1)"].to_numpy()
+        
+        interp_func = interp1d(x=x_values, y=y_values,
+                              kind="linear",
+                              bounds_error=False,
+                              fill_value=(0.0, 0.0))
         
         super().__init__(interp_func)
 
@@ -247,7 +303,7 @@ class CommonModifiedPowerLawSpectrum(RigiditySpectrum):
         Returns:
             The spectral index modification
         """
-        return self.deltaGamma * (P - 1)
+        return spec_index_modification(self.deltaGamma, P)
     
     def step_function(self, rigidity: float, lowerLimit: float, upperLimit: float) -> float:
         """
@@ -261,10 +317,7 @@ class CommonModifiedPowerLawSpectrum(RigiditySpectrum):
         Returns:
             1.0 if rigidity is within limits, 0.0 otherwise
         """
-        if (rigidity >= lowerLimit) and (rigidity <= upperLimit):
-            return 1.0
-        else:
-            return 0.0
+        return step_function(rigidity, lowerLimit, upperLimit)
     
     def evaluate(self, P: float) -> float:
         """
@@ -276,8 +329,9 @@ class CommonModifiedPowerLawSpectrum(RigiditySpectrum):
         Returns:
             The spectrum value at the given rigidity
         """
-        return self.J0 * self.step_function(P, self.lowerLimit, self.upperLimit) * \
-               (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
+        return common_modified_power_law_evaluate(
+            self.J0, self.gamma, self.deltaGamma, P, self.lowerLimit, self.upperLimit
+        )
 
 class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
     """
@@ -308,7 +362,7 @@ class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
         Returns:
             The high rigidity spectral index modification
         """
-        return self.deltaGamma * (P - 1)
+        return spec_index_modification_high(self.deltaGamma, P)
     
     def specIndexModification_low(self, P: float) -> float:
         """
@@ -320,7 +374,7 @@ class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
         Returns:
             The low rigidity spectral index modification
         """
-        return self.deltaGamma * (P)
+        return spec_index_modification_low(self.deltaGamma, P)
     
     def specIndexModification(self, P: float) -> float:
         """
@@ -332,7 +386,7 @@ class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
         Returns:
             The appropriate spectral index modification based on rigidity
         """
-        return self.specIndexModification_high(P) if P > 1.0 else self.specIndexModification_low(P)
+        return spec_index_modification_split(self.deltaGamma, P)
     
     def evaluate(self, P: float) -> float:
         """
@@ -344,7 +398,7 @@ class CommonModifiedPowerLawSpectrumSplit(RigiditySpectrum):
         Returns:
             The spectrum value at the given rigidity
         """
-        return self.J0 * (P ** (-(self.gamma + self.specIndexModification(P)))) / (100 ** 2)  # cm-2 s-1 sr-1 GV-1 : converted from m-2 to cm-2
+        return common_modified_power_law_split_evaluate(self.J0, self.gamma, self.deltaGamma, P)
 
 # For backward compatibility
 rigiditySpectrum = RigiditySpectrum

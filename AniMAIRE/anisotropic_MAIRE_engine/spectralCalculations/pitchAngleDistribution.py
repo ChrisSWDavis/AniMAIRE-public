@@ -4,8 +4,34 @@ import copy
 import matplotlib.pyplot as plt
 from typing import Optional, Callable, Any, Tuple
 from .utils import Distribution, SummedFunction, ScaledFunction
+import numba
 
-class PitchAngleDistribution(Distribution[float]):
+# Numba-optimized standalone functions
+@numba.njit(cache=True)
+def cosine_pad_evaluate(pitch_angle: float) -> float:
+    """Optimized cosine pitch angle distribution calculation"""
+    return np.abs(0.5 * np.sin(2 * pitch_angle))
+
+@numba.njit(cache=True)
+def isotropic_pad_evaluate() -> float:
+    """Optimized isotropic pitch angle distribution calculation"""
+    return 1.0
+
+@numba.njit(cache=True)
+def gaussian_pad_evaluate(pitch_angle: float, norm_factor: float, sigma: float, alpha: float) -> float:
+    """Optimized Gaussian pitch angle distribution calculation"""
+    return norm_factor * np.exp(-((pitch_angle - alpha) ** 2) / (sigma ** 2))
+
+@numba.njit(cache=True)
+def gaussian_beeck_pad_evaluate(pitch_angle_radians: float, norm_factor: float, A: float, B: float) -> float:
+    """Optimized Gaussian Beeck pitch angle distribution calculation"""
+    sin_pa = np.sin(pitch_angle_radians)
+    cos_pa = np.cos(pitch_angle_radians)
+    numerator = -0.5 * (pitch_angle_radians - (sin_pa * cos_pa))
+    denominator = A - (0.5 * (A - B) * (1 - cos_pa))
+    return norm_factor * np.exp(numerator / denominator)
+
+class PitchAngleDistribution(Distribution):
     """
     Base class for pitch angle distributions.
     """
@@ -100,7 +126,8 @@ class PitchAngleDistribution(Distribution[float]):
             fig, ax = plt.subplots(figsize=(6, 5))
         
         alpha_range = np.linspace(0, np.pi, 100)  # radians
-        pad_values = [self.pitchAngleDistFunction(a, reference_rigidity) for a in alpha_range]
+        # Convert list comprehension to vectorized computation if possible
+        pad_values = np.array([self.pitchAngleDistFunction(a, reference_rigidity) for a in alpha_range])
         ax.plot(alpha_range, pad_values, **kwargs)
         ax.set_xlabel('Pitch Angle (radians)')
         ax.set_ylabel('Relative Intensity')
@@ -157,7 +184,7 @@ class CosinePitchAngleDistribution(PitchAngleDistribution):
         Returns:
             float: The value of the cosine pitch angle distribution
         """
-        return np.abs(0.5 * np.sin(2 * pitchAngle))
+        return cosine_pad_evaluate(pitchAngle)
 
 
 class IsotropicPitchAngleDistribution(PitchAngleDistribution):
@@ -165,7 +192,8 @@ class IsotropicPitchAngleDistribution(PitchAngleDistribution):
     Isotropic pitch angle distribution.
     """
 
-    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0):
+    def __init__(self, reference_latitude_in_GSM: float = 0.0, reference_longitude_in_GSM: float = 0.0, 
+                 use_fast_calculation: bool = False):
         """
         Initialize the isotropic pitch angle distribution.
         
@@ -174,8 +202,11 @@ class IsotropicPitchAngleDistribution(PitchAngleDistribution):
             Reference latitude in GSM coordinates.
         - reference_longitude_in_GSM: float
             Reference longitude in GSM coordinates.
+        - use_fast_calculation: bool
+            Whether to use fast calculation method instead of accurate calculation.
         """
         super().__init__(None, reference_latitude_in_GSM, reference_longitude_in_GSM)
+        self.use_fast_calculation = use_fast_calculation
     
     def evaluate(self, pitchAngle: float, rigidity: float) -> float:
         """
@@ -188,7 +219,7 @@ class IsotropicPitchAngleDistribution(PitchAngleDistribution):
         Returns:
             float: The value of the isotropic pitch angle distribution (always 1)
         """
-        return 1
+        return isotropic_pad_evaluate()
 
 
 class GaussianPitchAngleDistribution(PitchAngleDistribution):
@@ -229,7 +260,7 @@ class GaussianPitchAngleDistribution(PitchAngleDistribution):
         Returns:
             float: The value of the Gaussian pitch angle distribution
         """
-        return self.normFactor * np.exp(-(pitchAngle - self.alpha)**2 / (self.sigma**2))
+        return gaussian_pad_evaluate(pitchAngle, self.normFactor, self.sigma, self.alpha)
 
 
 class GaussianBeeckPitchAngleDistribution(PitchAngleDistribution):
@@ -270,8 +301,7 @@ class GaussianBeeckPitchAngleDistribution(PitchAngleDistribution):
         Returns:
             float: The value of the Gaussian Beeck pitch angle distribution
         """
-        return self.normFactor * np.exp((-0.5 * (pitchAngle_radians - (np.sin(pitchAngle_radians) * np.cos(pitchAngle_radians)))) / \
-                                        (self.A - (0.5 * (self.A - self.B) * (1 - np.cos(pitchAngle_radians)))))
+        return gaussian_beeck_pad_evaluate(pitchAngle_radians, self.normFactor, self.A, self.B)
 
 # For backward compatibility
 pitchAngleDistribution = PitchAngleDistribution

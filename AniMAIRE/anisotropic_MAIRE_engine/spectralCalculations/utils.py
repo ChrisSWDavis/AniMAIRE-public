@@ -25,7 +25,7 @@ class ScaledFunction:
         return self.scale * self.func(*args, **kwargs)
 
 # Base distribution interface
-class Distribution(ABC, Generic[T]):
+class Distribution(): #ABC, Generic[T]):
     """
     Abstract base class for distributions.
     
@@ -33,7 +33,7 @@ class Distribution(ABC, Generic[T]):
     including rigidity spectra and pitch angle distributions.
     """
     
-    @abstractmethod
+    #@abstractmethod
     def evaluate(self, x: T, *args: Any) -> float:
         """
         Evaluate the distribution at a given point.
@@ -47,22 +47,22 @@ class Distribution(ABC, Generic[T]):
         """
         pass
     
-    @abstractmethod
+    #@abstractmethod
     def __call__(self, x: T, *args: Any) -> float:
         """Make the distribution callable"""
         pass
     
-    @abstractmethod
+    #@abstractmethod
     def __add__(self, other: 'Distribution[T]') -> 'Distribution[T]':
         """Add two distributions"""
         pass
     
-    @abstractmethod
+    #@abstractmethod
     def __mul__(self, scalar: float) -> 'Distribution[T]':
         """Scale the distribution by a factor"""
         pass
     
-    @abstractmethod
+    #@abstractmethod
     def plot(self, **kwargs: Any) -> Any:
         """Plot the distribution"""
         pass

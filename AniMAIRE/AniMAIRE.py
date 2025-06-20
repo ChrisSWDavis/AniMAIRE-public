@@ -1,14 +1,21 @@
 import numpy as np
 import datetime as dt
 import spaceweather as sw
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple, Union, Any
+
+from .MAIREPLUS_spectrum import MAIREPLUS_spectrum, _set_function_references
 
 from .utils import get_correctly_formatted_particle_dist_list, get_kp_index, validate_altitudes
-from .anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import DLRmodelSpectrum, CommonModifiedPowerLawSpectrum, CommonModifiedPowerLawSpectrumSplit
-from .anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import gaussianBeeckPitchAngleDistribution, isotropicPitchAngleDistribution, gaussianPitchAngleDistribution
+from .anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import DLRmodelSpectrum, CommonModifiedPowerLawSpectrum, CommonModifiedPowerLawSpectrumSplit, PowerLawSpectrum
+from .anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution, gaussianBeeckPitchAngleDistribution, isotropicPitchAngleDistribution, gaussianPitchAngleDistribution
 from .anisotropic_MAIRE_engine.generalEngineInstance import generalEngineInstance, default_array_of_lats_and_longs
 from .DoseRateFrame import DoseRateFrame
 import logging
+
+import datetime as dt
+import logging
+import numpy as np
+import pandas as pd
 
 def run_from_spectra(
         proton_rigidity_spectrum: Optional[Callable[[float], float]] = None,
@@ -341,6 +348,104 @@ def run_from_DLR_cosmic_ray_model(
         **kwargs,
     )
 
+# Set function references to avoid circular imports - do this after defining the functions
+_set_function_references(run_from_DLR_cosmic_ray_model, run_from_spectra)
+
+def run_maireplus_spectrum(
+    neutron_monitor_1_percentage_increase: float,
+    neutron_monitor_2_percentage_increase: float,
+    normalisation_monitor_percentage_increase: float,
+    OULU_gcr_count_rate_in_seconds: float,
+    datetime: Union[dt.datetime, np.datetime64],
+    kp_index: Optional[int] = None,
+    neutron_monitor_1_location: Tuple[float, float, float] = (65.0, 25.0, 0.0),
+    neutron_monitor_2_location: Tuple[float, float, float] = (50.0, 5.0, 0.0),
+    normalisation_monitor_location: Tuple[float, float, float] = (65.0, 25.0, 0.0),
+    use_fast_calculation: bool = True,
+    **kwargs: Any
+) -> DoseRateFrame:
+    """
+    Run AniMAIRE with a MAIREPLUS spectrum directly.
+    
+    Parameters:
+    -----------
+    neutron_monitor_1_location : tuple
+        (latitude, longitude, altitude) of first neutron monitor
+    neutron_monitor_1_percentage_increase : float
+        Percentage increase for first neutron monitor
+    neutron_monitor_2_location : tuple
+        (latitude, longitude, altitude) of second neutron monitor
+    neutron_monitor_2_percentage_increase : float
+        Percentage increase for second neutron monitor
+    normalisation_monitor_location : tuple
+        (latitude, longitude, altitude) of normalisation monitor
+    normalisation_monitor_percentage_increase : float
+        Percentage increase for normalisation monitor
+    OULU_gcr_count_rate_in_seconds : float
+        OULU GCR count rate in seconds
+    datetime : datetime.datetime
+        Date and time for the calculation
+    kp_index : int, optional
+        Kp index representing geomagnetic conditions.
+    array_of_lats_and_longs : list, optional
+        List of [latitude, longitude] pairs for calculation
+    use_fast_calculation : bool
+        Whether to use fast calculation mode for pitch angle distribution
+    **kwargs : dict
+        Additional arguments to pass to AniMAIRE.run_from_spectra
+        
+    Returns:
+    --------
+    DoseRateFrame
+        Result from AniMAIRE calculation
+    """
+
+    # Handle both datetime and numpy.datetime64 objects
+    if isinstance(datetime, np.datetime64):
+        # Convert numpy.datetime64 to Python datetime
+        datetime = pd.Timestamp(datetime).to_pydatetime()
+    
+    if hasattr(datetime, 'tzinfo') and datetime.tzinfo is None:
+        logging.warning("The inputted date and time does not have timezone info. Assuming UTC.")
+        datetime = datetime.replace(tzinfo=dt.timezone.utc)
+
+    # Get Kp index if not provided
+    if kp_index is None:
+        kp_index = get_kp_index(datetime)
+    
+    # Create the MAIREPLUS spectrum
+    spectrum = MAIREPLUS_spectrum(
+        neutron_monitor_1_location=neutron_monitor_1_location,
+        neutron_monitor_1_percentage_increase=neutron_monitor_1_percentage_increase,
+        neutron_monitor_2_location=neutron_monitor_2_location,
+        neutron_monitor_2_percentage_increase=neutron_monitor_2_percentage_increase,
+        normalisation_monitor_location=normalisation_monitor_location,
+        normalisation_monitor_percentage_increase=normalisation_monitor_percentage_increase,
+        OULU_gcr_count_rate_in_seconds=OULU_gcr_count_rate_in_seconds,
+        datetime=datetime,
+        kp_index=kp_index
+    )
+
+    GCR_dose_rate_frame = run_from_DLR_cosmic_ray_model(
+        OULU_count_rate_in_seconds=OULU_gcr_count_rate_in_seconds,
+        date_and_time=datetime,
+        Kp_index=kp_index,
+        proton_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
+        alpha_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
+        **kwargs
+    )
+    
+    # Run AniMAIRE with the spectrum
+    GLE_dose_rate_frame = run_from_spectra(
+        spectrum,
+        proton_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
+        date_and_time=datetime,
+        Kp_index=kp_index,
+        #array_of_lats_and_longs=array_of_lats_and_longs,
+        **kwargs
+    )
+
+    return GLE_dose_rate_frame + GCR_dose_rate_frame
 
 
 

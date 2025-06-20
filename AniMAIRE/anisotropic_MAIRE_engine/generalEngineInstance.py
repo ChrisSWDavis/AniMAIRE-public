@@ -6,12 +6,14 @@ from joblib import Memory
 import datetime as dt
 from typing import Optional
 
+from rigidity_predictor import RigidityPredictor
+
 from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools
 from .AsymptoticDirectionProcessing import generate_asymp_dir_DF
 from .otso_planet_processing import create_and_convert_full_planet
 import os
-
+from .spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 # Initialize tqdm for progress bars
 tqdm.pandas()
 
@@ -21,6 +23,33 @@ MAGCOSmemory = Memory(MAGCOScachedir, verbose=0)
 
 # Default array of latitudes and longitudes
 default_array_of_lats_and_longs = np.array(np.meshgrid(np.linspace(-90.0, 90.0, 37), np.linspace(0.0, 355.0, 72))).T.reshape(-1, 2)
+
+def get_default_set_of_rigidities(
+                            max_rigidity_1=1010.0, 
+                            min_rigidity_1=20.0, 
+                            n_increments_1=16,   
+                            max_rigidity_2=20.0, 
+                            min_rigidity_2=0.1, 
+                            n_increments_2=200,   
+                            ):
+
+    high_rigidity_step = (max_rigidity_1 - min_rigidity_1) / (n_increments_1 - 1)
+    low_rigidity_step = (max_rigidity_2 - min_rigidity_2) / (n_increments_2 - 1)
+
+    rigidity_levels_GV = []
+    current_rigidity = max_rigidity_1
+    while current_rigidity >= min_rigidity_1:
+            rigidity_levels_GV.append(current_rigidity)
+            current_rigidity -= high_rigidity_step
+
+    current_rigidity = max_rigidity_2 - low_rigidity_step
+    while current_rigidity >= min_rigidity_2:
+            rigidity_levels_GV.append(current_rigidity)
+            current_rigidity -= low_rigidity_step
+
+    return rigidity_levels_GV
+
+default_rigidity_list = get_default_set_of_rigidities()
 
 class generalEngineInstance:
     """
@@ -128,9 +157,30 @@ class generalEngineInstance:
             asymptotic_directions_function = create_and_convert_full_planet
         else:
             asymptotic_directions_function = AsympDirsTools.get_magcos_asymp_dirs
+        list_of_pads = [dist.momentum_distribution.pitch_angle_distribution for dist in self.list_of_particle_distributions]
 
         if self.asymp_dir_file:
             raw_asymp_df = self.get_raw_asymp_DF_from_file(self.asymp_dir_file)
+        # # Check if all particle distributions are isotropic with fast mode enabled
+        elif all(isinstance(dist, IsotropicPitchAngleDistribution) and dist.use_fast_calculation for dist in list_of_pads):
+        #   initialLatitude  initialLongitude  Rigidity      Lat     Long  Filter
+            
+            cutoff_rigidity_predictions = RigidityPredictor.load().batch_predict(pd.DataFrame( {
+                'latitude': [lat for lat, _ in self.array_of_lats_and_longs],
+                'longitude': [lon for _, lon in self.array_of_lats_and_longs],
+                'kp': self.Kp_index,
+                'datetime': self.date_and_time,
+            })) # output DF columns: latitude, longitude, kp, datetime, Ru, Rc, Rl
+            
+            # Create expanded dataframe with a row for each lat/lon and rigidity combination
+            raw_asymp_df = pd.DataFrame([
+                {'initialLatitude': row['latitude'], 'initialLongitude': row['longitude'], 
+                 'Rigidity': rig, 'Lat': row['latitude'], 'Long': row['longitude'], 
+                 'Filter': 1 if rig >= row['Rc'] else 0}
+                for rig in default_rigidity_list
+                for _, row in cutoff_rigidity_predictions.iterrows() 
+            ])
+
         else:
             if use_default_9_zeniths_and_azimuths and "array_of_zeniths_and_azimuths" in magneto_kwargs:
                 raise Exception("Error: Both use_default_9_zeniths_and_azimuths is True and 'array_of_zeniths_and_azimuths' is specified.")

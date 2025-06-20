@@ -1,3 +1,12 @@
+"""
+AniMAIRE_event module provides classes and functions for simulating solar energetic particle events.
+
+This module contains the main event processing classes for AniMAIRE, which calculate radiation dose rates 
+from parameterized solar energetic particle spectra. It supports both isotropic and anisotropic 
+pitch-angle distributions of cosmic rays.
+"""
+
+# Import necessary libraries
 from AniMAIRE.AniMAIRE import run_from_double_power_law_gaussian_distribution
 from AniMAIRE.DoseRateFrame import DoseRateFrame
 from AniMAIRE.dose_plotting import create_gle_globe_animation, create_gle_map_animation, plot_dose_map, plot_on_spherical_globe
@@ -5,8 +14,9 @@ import pandas as pd
 import numpy as np
 from scipy.interpolate import griddata
 import datetime as dt
-from tqdm.auto import tqdm
-from joblib import Memory
+from tqdm.auto import tqdm  # Progress bar for long-running operations
+from joblib import Memory  # For caching computation results
+from typing import Union, Sequence, Optional, Dict, Any, Tuple, List
 
 import math
 import matplotlib.pyplot as plt
@@ -14,129 +24,1070 @@ import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 from IPython.display import HTML
 
-import netCDF4
+import netCDF4  # For exporting data to NetCDF format
 
+# Set up caching to avoid recomputing expensive operations
 memory = Memory(location='./.AniMAIRE_event_cache')
 
-class AniMAIRE_event():
-    def __init__(self, spectra_file_path):
-        self.spectra_file_path = spectra_file_path
-        self.raw_spectra_data = pd.read_csv(spectra_file_path)
-        self.spectra = self.correctly_formatted_spectra()
-        self.dose_rate_components = {} # Track components that were added to create this event
-
-    def __add__(self, other):
+class BaseAniMAIREEvent:
+    """
+    Base class for AniMAIRE event simulations with shared functionality.
+    
+    This class provides common methods for analyzing and visualizing radiation dose rates
+    from solar energetic particle events. It serves as a template that specific event types
+    can inherit from and extend.
+    
+    Attributes:
+        dose_rate_components (Dict): Storage for component-wise dose rate data
+        dose_rates (Dict[dt.datetime, DoseRateFrame]): Storage for calculated dose rates at each timestamp
+    """
+    
+    DEFAULT_ALTITUDE = 12.192  # 40,000 ft in km
+    
+    def __init__(self) -> None:
         """
-        Add two AniMAIRE_events or an AniMAIRE_event and a DoseRateFrame.
+        Initialize a new BaseAniMAIREEvent instance with empty containers.
+        """
+        # Initialize common containers for components and results
+        self.dose_rate_components: Dict = {}
+        self.dose_rates: Dict[dt.datetime, DoseRateFrame] = {}
 
-        Parameters:
-        -----------
-        other : AniMAIRE_event or DoseRateFrame
-            The object to add to this event
-
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the event object.
+        
         Returns:
-        --------
-        AniMAIRE_event
-            A new AniMAIRE_event with combined dose rates
+            str: Concise summary of the event with key information
+        """
+        class_name = self.__class__.__name__
+        n_timestamps = len(self.dose_rates) if hasattr(self, 'dose_rates') and self.dose_rates else 0
+        
+        timestamp_range = "N/A"
+        if n_timestamps > 0:
+            timestamps = sorted(self.dose_rates.keys())
+            timestamp_range = f"{timestamps[0]} to {timestamps[-1]}"
+            
+        altitudes = "N/A"
+        if n_timestamps > 0:
+            all_alts = set()
+            for frame in self.dose_rates.values():
+                all_alts.update(frame.get_altitudes())
+            alt_str = ", ".join(f"{alt:.2f}" for alt in sorted(all_alts))
+            altitudes = f"[{alt_str}] km"
+        
+        # Get class-specific attributes
+        info_lines = []
+        if hasattr(self, 'data_directory_path'):
+            info_lines.append(f"Data: {self.data_directory_path}")
+        if hasattr(self, 'reference_station'):
+            info_lines.append(f"Reference: {self.reference_station}")
+        if hasattr(self, 'spectra_file_path'):
+            info_lines.append(f"Spectra: {self.spectra_file_path}")
+            
+        # Add neutron monitor info
+        monitor_info = self._get_monitor_info()
+        if monitor_info:
+            if isinstance(monitor_info, list):
+                if all(isinstance(x, dict) for x in monitor_info):
+                    for d in monitor_info:
+                        info_lines.append("Monitors: " + ", ".join(f"{k}: {v}" for k, v in d.items()))
+                else:
+                    for s in monitor_info:
+                        info_lines.append(f"Monitor: {s}")
+        
+        # Format the output
+        class_info = f"{class_name} with {n_timestamps} timestamps"
+        if info_lines:
+            extra_info = ", ".join(info_lines)
+            return f"{class_info} ({extra_info})\nTime range: {timestamp_range}\nAltitudes: {altitudes}"
+        else:
+            return f"{class_info}\nTime range: {timestamp_range}\nAltitudes: {altitudes}"
+    
+    def _repr_html_(self) -> str:
+        """
+        Return an HTML representation of the event object for Jupyter notebook display.
+        
+        Returns:
+            str: HTML representation of the event
+        """
+        class_name = self.__class__.__name__
+        n_timestamps = len(self.dose_rates) if hasattr(self, 'dose_rates') and self.dose_rates else 0
+        
+        timestamp_range = "N/A"
+        dose_types = []
+        if n_timestamps > 0:
+            timestamps = sorted(self.dose_rates.keys())
+            timestamp_range = f"{timestamps[0]} to {timestamps[-1]}"
+            first_frame = next(iter(self.dose_rates.values()))
+            if first_frame is not None:
+                expected_types = ['edose', 'adose', 'dosee', 'tn1', 'tn2', 'tn3', 'SEU', 'SEL']
+                dose_types = [col for col in expected_types if col in first_frame.columns]
+                dose_types += [col for col in first_frame.columns 
+                              if any(col.startswith(b+' ') for b in ['SEU', 'SEL'])]
+        
+        altitudes = []
+        if n_timestamps > 0:
+            all_alts = set()
+            for frame in self.dose_rates.values():
+                all_alts.update(frame.get_altitudes())
+            altitudes = sorted(all_alts)
+            
+        # Get class-specific attributes for display
+        info_rows = []
+        if hasattr(self, 'data_directory_path'):
+            info_rows.append(f"<tr><td>Data directory</td><td>{self.data_directory_path}</td></tr>")
+        if hasattr(self, 'reference_station'):
+            info_rows.append(f"<tr><td>Reference station</td><td>{self.reference_station}</td></tr>")
+        if hasattr(self, 'spectra_file_path'):
+            info_rows.append(f"<tr><td>Spectra file</td><td>{self.spectra_file_path}</td></tr>")
+        
+        # Add neutron monitor info
+        monitor_info = self._get_monitor_info()
+        if monitor_info:
+            if isinstance(monitor_info, list):
+                if all(isinstance(x, dict) for x in monitor_info):
+                    for i, d in enumerate(monitor_info, 1):
+                        info_rows.append("<tr><td>Monitor set {}</td><td>{}</td></tr>".format(i, ", ".join(f"{k}: {v}" for k, v in d.items())))
+                else:
+                    for s in monitor_info:
+                        info_rows.append(f"<tr><td>Monitor</td><td>{s}</td></tr>")
+        
+        # Build the HTML table
+        html = f"""
+        <div style="background-color:#f8f9fa;padding:12px;border-radius:4px;border:1px solid #ddd;">
+            <h3 style="margin-top:0">{class_name}</h3>
+            <table>
+                <tr><td><b>Timestamps</b></td><td>{n_timestamps}</td></tr>
+                <tr><td><b>Time range</b></td><td>{timestamp_range}</td></tr>
+                {"".join(info_rows)}
+            </table>
+            
+            <h4 style="margin-top:10px">Available data</h4>
+        """
+        
+        if altitudes:
+            html += "<p><b>Altitudes:</b> " + ", ".join([f"{alt:.2f} km" for alt in altitudes]) + "</p>"
+            
+        if dose_types:
+            html += "<p><b>Dose types:</b> " + ", ".join(dose_types) + "</p>"
+            
+        # Add a brief help text
+        html += """
+            <p style="margin-top:10px;font-size:0.9em;color:#666;">
+                <i>Available methods: summarize_results(), create_gle_map_animation(), plot_integrated_dose_map(), etc.</i>
+            </p>
+        </div>
+        """
+        return html
 
+    def run_AniMAIRE(self, *args: Any, **kwargs: Any) -> Dict[dt.datetime, DoseRateFrame]:
+        """
+        Abstract method to run AniMAIRE simulations.
+        
+        This method must be implemented by subclasses to perform the actual simulation
+        for the specific event type.
+        
+        Args:
+            *args: Variable length argument list for subclass implementations
+            **kwargs: Arbitrary keyword arguments for subclass implementations
+            
+        Returns:
+            Dict[dt.datetime, DoseRateFrame]: Dictionary of dose rate frames indexed by timestamp
+            
         Raises:
-        -------
-        ValueError
-            If timestamps don't match when adding two events
-            If this event hasn't been run yet (no dose_rates)
+            NotImplementedError: Always raised since this is an abstract method
+        """
+        raise NotImplementedError("Subclasses must implement run_AniMAIRE method")
+
+    def summarize_spectra(self) -> Optional[Dict[str, Any]]:
+        """
+        Provide a summary of the input spectral data including time range and parameter ranges.
+        
+        Analyzes the loaded spectral data and returns statistics about the parameters used
+        in the simulation, including minimum and maximum values for each parameter.
+        
+        Returns:
+            Optional[Dict[str, Any]]: Dictionary with counts and parameter statistics,
+                                     or None if spectra data is not available
+                                     
+        Example return structure:
+            {
+                "Number of Timestamps": int,
+                "Time Range (UTC)": (min_datetime, max_datetime),
+                "Parameter Ranges": {
+                    "J0": (min_val, max_val),
+                    "gamma": (min_val, max_val),
+                    # ... other parameters
+                }
+            }
+        """
+        if not hasattr(self, 'spectra') or self.spectra is None:
+            print("Spectra data not loaded or formatted yet.")
+            return None
+        summary = {
+            "Number of Timestamps": len(self.spectra),
+            "Time Range (UTC)": (self.spectra['datetime'].min(), self.spectra['datetime'].max()),
+            "Parameter Ranges": {}
+        }
+        param_cols = ['J0', 'gamma', 'deltaGamma', 'sigma_1', 'sigma_2', 'B',
+                      'alpha_prime', 'reference_pitch_angle_latitude',
+                      'reference_pitch_angle_longitude']
+        for col in param_cols:
+            if col in self.spectra.columns:
+                summary["Parameter Ranges"][col] = (self.spectra[col].min(), self.spectra[col].max())
+        print("--- Input Spectra Summary ---")
+        print(f"Number of Timestamps: {summary['Number of Timestamps']}")
+        print(f"Time Range (UTC): {summary['Time Range (UTC)'][0]} to {summary['Time Range (UTC)'][1]}")
+        print("Parameter Ranges:")
+        for p, (mn, mx) in summary["Parameter Ranges"].items():
+            print(f"  {p}: {mn:.2e} to {mx:.2e}")
+        print("---------------------------")
+        return summary
+
+    def summarize_results(self) -> Optional[Dict[str, Any]]:
+        """
+        Provides a comprehensive summary of the calculated dose rate results across all dose types.
+        Returns a dict with peak values, times, and locations per dose type.
         """
         if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            raise ValueError("This event doesn't have dose rates. Run run_AniMAIRE() first.")
-
-        # Create new event with the same spectral data
-        new_event = AniMAIRE_event(self.spectra_file_path)
-        new_event.dose_rates = {}
-        
-        # Initialize dose_rate_components with this event
-        new_event.dose_rate_components = {'base': self}
-        
-        if isinstance(other, AniMAIRE_event):
-            # Check if other event has been run
-            if not hasattr(other, 'dose_rates') or not other.dose_rates:
-                raise ValueError("The other event doesn't have dose rates. Run run_AniMAIRE() first.")
-                
-            # Check timestamps match
-            self_timestamps = set(self.dose_rates.keys())
-            other_timestamps = set(other.dose_rates.keys())
-            
-            if self_timestamps != other_timestamps:
-                raise ValueError("Events must have identical timestamps to be added together.")
-                
-            # Add corresponding frames
-            for ts in self_timestamps:
-                new_event.dose_rates[ts] = self.dose_rates[ts] + other.dose_rates[ts]
-            
-            # Add other to components
-            new_event.dose_rate_components['added_event'] = other
-            
-        elif hasattr(other, '__class__') and other.__class__.__name__ == 'DoseRateFrame':
-            # Add DoseRateFrame to every timestamp
+            print("AniMAIRE simulation results not available. Run run_AniMAIRE() first.")
+            return None
+        timestamps = sorted(self.dose_rates.keys())
+        first_frame = self.dose_rates[timestamps[0]]
+        expected = {'edose':'effective dose in µSv/hr','adose':'ambient dose equivalent in µSv/hr',
+                    'dosee':'dose equivalent in µSv/hr','tn1':'>1 MeV neutron flux in n/cm2/s',
+                    'tn2':'>10 MeV neutron flux in n/cm2/s','tn3':'>60 MeV neutron flux in n/cm2/s',
+                    'SEU':'single event upset rate','SEL':'single event latch-up rate'}
+        avail = [c for c in expected if c in first_frame.columns]
+        derived = [c for c in first_frame.columns if any(c.startswith(b+' ') for b in ['SEU','SEL'])]
+        dose_cols = avail + derived
+        if not dose_cols:
+            print("No dose rate columns found in the results.")
+            return None
+        dose_summaries = {}
+        for dc in dose_cols:
+            peak, t_peak, loc = 0.0, None, None
             for ts, frame in self.dose_rates.items():
-                new_event.dose_rates[ts] = frame + other
-                
-            # Add frame to components
-            new_event.dose_rate_components['added_frame'] = other
-            
-        else:
-            raise TypeError(f"Unsupported operand type: {type(other)}. Must be AniMAIRE_event or DoseRateFrame.")
-            
-        return new_event
-        
-    def __radd__(self, other):
+                if dc not in frame.columns: continue
+                cp = frame[dc].max()
+                if cp > peak:
+                    peak, t_peak = cp, ts
+                    try:
+                        row = frame.loc[frame[dc].idxmax()]
+                        loc = (row.get('latitude'), row.get('longitude'), row.get('altitude (km)'))
+                    except:
+                        loc = None
+            dose_summaries[dc] = {"Peak Value":peak, "Time of Peak":t_peak, "Location of Peak":loc,
+                                  "Description":expected.get(dc,dc)}
+        summary = {"Number of Timestamps":len(timestamps),
+                   "Time Range (UTC)":(timestamps[0],timestamps[-1]),
+                   "Dose Summaries":dose_summaries}
+        print("--- Simulation Results Summary ---")
+        print(f"Processed {summary['Number of Timestamps']} timestamps {summary['Time Range (UTC)']}")
+        for dc, info in summary['Dose Summaries'].items():
+            print(f"{dc}: Peak {info['Peak Value']:.3e} at {info['Time of Peak']} Loc {info['Location of Peak']}")
+        print("------------------------------")
+        return summary
+
+    def get_available_altitudes(self) -> Sequence[float]:
         """
-        Support for reflexive addition (when this AniMAIRE_event is the right operand).
+        Get all unique altitudes (km) across stored dose rate frames.
+        """
+        if not hasattr(self, 'dose_rates') or not self.dose_rates:
+            print("No dose rate data available. Run run_AniMAIRE() first.")
+            return []
+        all_alts = set()
+        for frame in self.dose_rates.values():
+            all_alts.update(frame.get_altitudes())
+        return sorted(all_alts)
+
+    def _get_best_altitude(self, requested_altitude: Optional[float] = None) -> Optional[float]:
+        """
+        Get the best available altitude for plotting.
         
-        Parameters:
-        -----------
-        other : object
-            The object being added to this AniMAIRE_event
+        If a specific altitude is requested, returns that altitude if available or the nearest available altitude.
+        If no altitude is requested, returns the default altitude (12.192 km) if available or the nearest available altitude.
+        
+        Args:
+            requested_altitude (Optional[float], optional): Specific altitude to check for. Defaults to None.
             
         Returns:
-        --------
-        AniMAIRE_event
-            A new AniMAIRE_event with combined dose rates
-            
-        Raises:
-        -------
-        TypeError
-            If the other operand is not a DoseRateFrame
+            Optional[float]: Best available altitude, or None if no altitudes are available
         """
-        # For the case of 0 + AniMAIRE_event (used in sum() operations)
-        if isinstance(other, (int, float)) and other == 0:
-            # Return a copy of self
-            new_event = AniMAIRE_event(self.spectra_file_path)
-            if hasattr(self, 'dose_rates'):
-                new_event.dose_rates = {ts: frame.copy() for ts, frame in self.dose_rates.items()}
-                new_event.dose_rate_components = {'base': self}
-            return new_event
-        
-        # Handle DoseRateFrame + AniMAIRE_event
-        if hasattr(other, '__class__') and other.__class__.__name__ == 'DoseRateFrame':
-            if not hasattr(self, 'dose_rates') or not self.dose_rates:
-                raise ValueError("This event doesn't have dose rates. Run run_AniMAIRE() first.")
-                
-            # Create new event with the same spectral data
-            new_event = AniMAIRE_event(self.spectra_file_path)
-            new_event.dose_rates = {}
+        available_alts = self.get_available_altitudes()
+        if not available_alts:
+            return None
             
-            # Initialize dose_rate_components
-            new_event.dose_rate_components = {'base': self, 'added_frame': other}
-            
-            # Add DoseRateFrame to every timestamp
-            for ts, frame in self.dose_rates.items():
-                new_event.dose_rates[ts] = other + frame
-                
-            return new_event
+        target = requested_altitude if requested_altitude is not None else self.DEFAULT_ALTITUDE
         
-        # Unsupported type
-        raise TypeError(f"Unsupported operand type: {type(other)}. Must be DoseRateFrame.")
+        # If the exact altitude is available, use it
+        if target in available_alts:
+            return target
+            
+        # Find the nearest available altitude
+        nearest_alt = min(available_alts, key=lambda x: abs(x - target))
+        return nearest_alt
 
-    def correctly_formatted_spectra(self):
+    def create_gle_map_animation(self, altitude: Optional[float] = None, save_gif: bool = False, 
+                              save_mp4: bool = False, **kwargs: Any) -> HTML:
+        """
+        Create a 2D map animation of dose rates at a given altitude over time.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            save_gif (bool, optional): Whether to save as GIF. Defaults to False.
+            save_mp4 (bool, optional): Whether to save as MP4. Defaults to False.
+            **kwargs: Additional keyword arguments passed to the animation function
+            
+        Returns:
+            HTML: HTML object for displaying the animation in notebooks
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        return create_gle_map_animation(self.dose_rates, best_altitude, save_gif, save_mp4, **kwargs)
+
+    def create_gle_globe_animation(self, altitude: Optional[float] = None, save_gif: bool = False, 
+                                  save_mp4: bool = False, **kwargs: Any) -> HTML:
+        """
+        Create a 3D globe animation of dose rates at a given altitude over time.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            save_gif (bool, optional): Whether to save as GIF. Defaults to False.
+            save_mp4 (bool, optional): Whether to save as MP4. Defaults to False.
+            **kwargs: Additional keyword arguments passed to the animation function
+            
+        Returns:
+            HTML: HTML object for displaying the animation in notebooks
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        return create_gle_globe_animation(self.dose_rates, best_altitude, save_gif, save_mp4, **kwargs)
+
+    def create_spectra_animation(self, output_filename: str = 'GLE74_spectra_animation.mp4', 
+                                fps: int = 2, spectra_xlim: Tuple[float, float] = (0.1, 20), 
+                                spectra_ylim: Tuple[float, float] = (1e-16, 1e14), 
+                                **kwargs: Any) -> HTML:
+        """
+        Animate rigidity spectra over the event duration.
+        
+        Creates an animation showing how the rigidity spectrum changes over time during the event.
+        
+        Args:
+            output_filename (str, optional): Output file path. Defaults to 'GLE74_spectra_animation.mp4'.
+            fps (int, optional): Frames per second for animation. Defaults to 2.
+            spectra_xlim (Tuple[float, float], optional): X-axis limits (GV). Defaults to (0.1, 20).
+            spectra_ylim (Tuple[float, float], optional): Y-axis limits (flux). Defaults to (1e-16, 1e14).
+            **kwargs: Additional keyword arguments passed to the plot_spectra method
+            
+        Returns:
+            HTML: HTML object for displaying the animation in notebooks
+        """
+        timestamps = sorted(self.dose_rates.keys())
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        def update(i: int) -> Tuple:
+            ax.clear()
+            ts = timestamps[i]
+            frame = self.dose_rates[ts]
+            frame.plot_spectra(ax=ax, **kwargs)
+            ax.set_title(f'Rigidity Spectra at {ts}')
+            ax.set_xlim(spectra_xlim)
+            ax.set_ylim(spectra_ylim)
+            return ax,
+
+        ani = animation.FuncAnimation(fig, update, frames=len(timestamps), blit=False, interval=1000/fps)
+        ani.save(output_filename, writer='ffmpeg', fps=fps)
+        plt.close(fig)
+        return HTML(ani.to_jshtml())
+
+    def create_pad_animation(self, output_filename: str = 'GLE74_pad_animation.mp4', 
+                            fps: int = 2, pad_xlim: Tuple[float, float] = (0, 3.14), 
+                            pad_ylim: Tuple[float, float] = (0, 1.2), **kwargs: Any) -> HTML:
+        """
+        Animate pitch angle distributions over the event duration.
+        
+        Creates an animation showing how the pitch angle distribution changes over time during the event.
+        
+        Args:
+            output_filename (str, optional): Output file path. Defaults to 'GLE74_pad_animation.mp4'.
+            fps (int, optional): Frames per second for animation. Defaults to 2.
+            pad_xlim (Tuple[float, float], optional): X-axis limits (radians). Defaults to (0, 3.14).
+            pad_ylim (Tuple[float, float], optional): Y-axis limits (relative intensity). Defaults to (0, 1.2).
+            **kwargs: Additional keyword arguments passed to the plot_pitch_angle_distributions method
+            
+        Returns:
+            HTML: HTML object for displaying the animation in notebooks
+        """
+        timestamps = sorted(self.dose_rates.keys())
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        def update(i: int) -> Tuple:
+            ax.clear()
+            ts = timestamps[i]
+            frame = self.dose_rates[ts]
+            frame.plot_pitch_angle_distributions(ax=ax, **kwargs)
+            ax.set_title(f'Pitch Angle Distributions at {ts}')
+            ax.set_xlim(pad_xlim)
+            ax.set_ylim(pad_ylim)
+            return ax,
+
+        ani = animation.FuncAnimation(fig, update, frames=len(timestamps), blit=False, interval=1000/fps)
+        ani.save(output_filename, writer='ffmpeg', fps=fps)
+        plt.close(fig)
+        return HTML(ani.to_jshtml())
+
+    def create_combined_animation(self, output_filename: str = 'GLE74_combined_animation.mp4', 
+                                  fps: int = 2, spectra_xlim: Tuple[float, float] = (0.1, 20), 
+                                  spectra_ylim: Tuple[float, float] = (1e-16, 1e14),
+                                  pad_xlim: Tuple[float, float] = (0, 3.14), 
+                                  pad_ylim: Tuple[float, float] = (0, 1.2), 
+                                  **kwargs: Any) -> HTML:
+        """
+        Animate both rigidity spectra and pitch angle distributions side by side.
+        
+        Creates a two-panel animation showing how both the rigidity spectrum and
+        pitch angle distribution change over time during the event.
+        
+        Args:
+            output_filename (str, optional): Output file path. Defaults to 'GLE74_combined_animation.mp4'.
+            fps (int, optional): Frames per second for animation. Defaults to 2.
+            spectra_xlim (Tuple[float, float], optional): X-axis limits for spectra (GV). Defaults to (0.1, 20).
+            spectra_ylim (Tuple[float, float], optional): Y-axis limits for spectra (flux). Defaults to (1e-16, 1e14).
+            pad_xlim (Tuple[float, float], optional): X-axis limits for PAD (radians). Defaults to (0, 3.14).
+            pad_ylim (Tuple[float, float], optional): Y-axis limits for PAD (relative intensity). Defaults to (0, 1.2).
+            **kwargs: Additional keyword arguments passed to plotting methods
+            
+        Returns:
+            HTML: HTML object for displaying the animation in notebooks
+        """
+        timestamps = sorted(self.dose_rates.keys())
+        fig = plt.figure(figsize=(12, 5))
+        gs = GridSpec(1, 2, figure=fig)
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1])
+
+        def update(i: int) -> Tuple[plt.Axes, plt.Axes]:
+            ax1.clear()
+            ax2.clear()
+            ts = timestamps[i]
+            frame = self.dose_rates[ts]
+            frame.plot_spectra(ax=ax1, **kwargs)
+            ax1.set_title(f'Rigidity Spectra at {ts}')
+            ax1.set_xlim(spectra_xlim)
+            ax1.set_ylim(spectra_ylim)
+            frame.plot_pitch_angle_distributions(ax=ax2, **kwargs)
+            ax2.set_title(f'Pitch Angle Distributions at {ts}')
+            ax2.set_xlim(pad_xlim)
+            ax2.set_ylim(pad_ylim)
+            return ax1, ax2
+
+        ani = animation.FuncAnimation(fig, update, frames=len(timestamps), blit=False, interval=1000/fps)
+        ani.save(output_filename, writer='ffmpeg', fps=fps)
+        plt.close(fig)
+        return HTML(ani.to_jshtml())
+
+    def get_dose_rate_frame(self, timestamp: dt.datetime, nearest: bool = True) -> Optional[DoseRateFrame]:
+        """
+        Retrieve DoseRateFrame for a specific timestamp.
+        
+        Args:
+            timestamp (dt.datetime): The timestamp to retrieve the frame for
+            nearest (bool, optional): If True and exact timestamp not found, return nearest. Defaults to True.
+            
+        Returns:
+            Optional[DoseRateFrame]: The dose rate frame at the requested time, or None if not found
+                                     and nearest=False
+        """
+        if timestamp in self.dose_rates: return self.dose_rates[timestamp]
+        if not nearest: return None
+        times = sorted(self.dose_rates.keys()); arr = [t.timestamp() for t in times]
+        idx = int(np.argmin(np.abs(np.array(arr)-timestamp.timestamp())))
+        return self.dose_rates[times[idx]]
+
+    def get_dose_rate_at_location(self, latitude: float, longitude: float, altitude: float, 
+                                  timestamp: dt.datetime, dose_type: str = 'edose', 
+                                  nearest_ts: bool = True, 
+                                  interpolation_method: str = 'linear') -> Optional[float]:
+        """
+        Interpolate dose rate at a specific geographic location and time.
+        
+        Args:
+            latitude (float): Geographic latitude in degrees
+            longitude (float): Geographic longitude in degrees
+            altitude (float): Altitude in kilometers
+            timestamp (dt.datetime): Time to retrieve the dose rate for
+            dose_type (str, optional): Dose rate type to retrieve. Defaults to 'edose'.
+            nearest_ts (bool, optional): If True, use nearest timestamp if exact not found. Defaults to True.
+            interpolation_method (str, optional): Method for interpolation. Defaults to 'linear'.
+                                                 Can be 'linear', 'nearest', or 'cubic'.
+            
+        Returns:
+            Optional[float]: Interpolated dose rate at the requested location and time, or None if
+                            data is not available or interpolation fails
+        """
+        frame = self.get_dose_rate_frame(timestamp, nearest=nearest_ts)
+        if frame is None: return None
+        tol = 0.1
+        data = frame.query(f"`altitude (km)` >= {altitude-tol} & `altitude (km)` <= {altitude+tol}")
+        if data.empty: return None
+        if data['altitude (km)'].nunique()>1:
+            alt0 = data.iloc[(data['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+            data = data[data['altitude (km)']==alt0]
+        if dose_type not in data.columns: return None
+        
+        # Handle case with only one latitude/longitude point
+        if len(data) == 1:
+            # If there's only one point, return its value directly if it matches the requested coordinates
+            # or use nearest neighbor approach
+            point = data.iloc[0]
+            if abs(point['latitude'] - latitude) < 1e-6 and abs(point['longitude'] - longitude) < 1e-6:
+                return float(point[dose_type])
+            else:
+                # Calculate distance to the single point
+                dist = ((point['latitude'] - latitude)**2 + (point['longitude'] - longitude)**2)**0.5
+                # Return the value if it's close enough, otherwise None
+                return float(point[dose_type]) if dist < 10.0 else None
+        
+        # Normal interpolation for multiple points
+        pts = data[['latitude','longitude']].values; vals=data[dose_type].values
+        interp=griddata(pts, vals, (latitude,longitude), method=interpolation_method)
+        return None if np.isnan(interp) else float(interp)
+
+    def _get_target_grid(self, target_grid: Optional[np.ndarray] = None, 
+                         n_lat: int = 90, n_lon: int = 180) -> np.ndarray:
+        """
+        Get or create a target grid for interpolation.
+        
+        Args:
+            target_grid (Optional[np.ndarray], optional): Existing grid to use. Defaults to None.
+            n_lat (int, optional): Number of latitude points if creating grid. Defaults to 90.
+            n_lon (int, optional): Number of longitude points if creating grid. Defaults to 180.
+            
+        Returns:
+            np.ndarray: 2D array with shape (n_lat*n_lon, 2) containing lat/lon pairs
+        """
+        if target_grid is not None: return target_grid
+        lats=np.linspace(-90,90,n_lat); lons=np.linspace(-180,180,n_lon)
+        lon_g, lat_g = np.meshgrid(lons,lats)
+        return np.vstack([lat_g.ravel(), lon_g.ravel()]).T
+
+    def _calculate_time_deltas(self) -> np.ndarray:
+        """
+        Calculate time intervals between timestamps, in hours.
+        
+        For each timestamp, calculates the "responsibility period" - half the interval to the
+        previous timestamp plus half the interval to the next timestamp.
+        
+        Returns:
+            np.ndarray: Array of time intervals in hours for each timestamp
+        """
+        times=sorted(self.dose_rates.keys())
+        if len(times)<2: return np.array([1.0])
+        diffs = np.diff([t.timestamp() for t in times]); dt=np.zeros(len(times))
+        dt[0]=diffs[0]/2; dt[-1]=diffs[-1]/2; dt[1:-1]=(diffs[:-1]+diffs[1:])/2
+        return dt/3600.0
+
+    def calculate_integrated_dose(self, altitude: float, dose_type: str = 'edose') -> Optional[pd.DataFrame]:
+        """
+        Integrate dose over time on native grid at specified altitude.
+        
+        Calculates the time-integrated dose for each grid point at the specified altitude
+        by summing the dose rate at each timestamp multiplied by the corresponding time interval.
+        
+        Args:
+            altitude (float): Altitude in kilometers
+            dose_type (str, optional): Dose rate type to integrate. Defaults to 'edose'.
+            
+        Returns:
+            Optional[pd.DataFrame]: DataFrame with columns (latitude, longitude, integrated_dose_type_uSv),
+                                   or None if no data available at specified altitude
+        """
+        times=sorted(self.dose_rates.keys()); first=self.dose_rates[times[0]]
+        tol=0.1; df0=first.query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+        if df0.empty: return None
+        if df0['altitude (km)'].nunique()>1:
+            alt0=df0.iloc[(df0['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+            df0=df0[df0['altitude (km)']==alt0]
+        idx=pd.MultiIndex.from_frame(df0[['latitude','longitude']]); acc=pd.Series(0.0,index=idx)
+        dts=self._calculate_time_deltas()
+        for i,ts in enumerate(times):
+            df=self.dose_rates[ts].query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+            if df.empty: continue
+            if df['altitude (km)'].nunique()>1:
+                altn=df.iloc[(df['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+                df=df[df['altitude (km)']==altn]
+            if dose_type not in df.columns: continue
+            s=df.set_index(['latitude','longitude'])[dose_type]
+            acc=acc.add(s*dts[i],fill_value=0)
+        out=acc.reset_index().rename(columns={0:f'integrated_{dose_type}_uSv'})
+        return out
+
+    def get_peak_dose_rate_map(self, altitude, dose_type='edose'):
+        """Compute peak dose rate per grid point at altitude."""
+        times=sorted(self.dose_rates.keys()); first=self.dose_rates[times[0]]
+        tol=0.1; df0=first.query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+        if df0.empty: return None
+        if df0['altitude (km)'].nunique()>1:
+            alt0=df0.iloc[(df0['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+            df0=df0[df0['altitude (km)']==alt0]
+        idx=pd.MultiIndex.from_frame(df0[['latitude','longitude']]); peak=pd.Series(-np.inf,index=idx)
+        for ts in times:
+            df=self.dose_rates[ts].query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+            if df.empty: continue
+            if df['altitude (km)'].nunique()>1:
+                altn=df.iloc[(df['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+                df=df[df['altitude (km)']==altn]
+            if dose_type not in df.columns: continue
+            cur=df.set_index(['latitude','longitude'])[dose_type]
+            peak=pd.Series(np.maximum(peak.values,cur.reindex(peak.index,fill_value=-np.inf).values),index=peak.index)
+        peak.replace(-np.inf,np.nan,inplace=True)
+        return peak.reset_index().rename(columns={0:f'peak_{dose_type}_uSv_hr'})
+
+    def plot_integrated_dose_map(self, altitude: Optional[float] = None, dose_type: str = 'edose', 
+                              show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Axes]:
+        """
+        Plot integrated dose map using native grid.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            dose_type (str, optional): Dose rate type to integrate. Defaults to 'edose'.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_dose_map function
+            
+        Returns:
+            Optional[plt.Axes]: Matplotlib axes object with the plot, or None if no data available
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        df = self.calculate_integrated_dose(best_altitude, dose_type)
+        if df is None: return None
+        df['altitude (km)'] = best_altitude
+        args = {'plot_title': f'Integrated {dose_type} at {best_altitude} km', 
+                'dose_type': f'integrated_{dose_type}_uSv', 
+                'legend_label': f'Integrated {dose_type}'}
+        args.update(plot_kwargs)
+        
+        ax, _ = plot_dose_map(df, **args)
+        return ax
+
+    def plot_peak_dose_rate_map(self, altitude: Optional[float] = None, dose_type: str = 'edose', 
+                               show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Axes]:
+        """
+        Plot peak dose rate map using native grid.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            dose_type (str, optional): Dose rate type to analyze. Defaults to 'edose'.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_dose_map function
+            
+        Returns:
+            Optional[plt.Axes]: Matplotlib axes object with the plot, or None if no data available
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        df = self.get_peak_dose_rate_map(best_altitude, dose_type)
+        if df is None: return None
+        df['altitude (km)'] = best_altitude
+        args = {'plot_title': f'Peak {dose_type} at {best_altitude} km', 
+                'dose_type': f'peak_{dose_type}_uSv_hr', 
+                'legend_label': f'Peak {dose_type}'}
+        args.update(plot_kwargs)
+        
+        ax, _ = plot_dose_map(df, **args)
+        return ax
+
+    def plot_integrated_dose_globe(self, altitude: Optional[float] = None, dose_type: str = 'edose',
+                                  show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Figure]:
+        """
+        Plot integrated dose on 3D globe.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            dose_type (str, optional): Dose rate type to integrate. Defaults to 'edose'.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_on_spherical_globe function
+            
+        Returns:
+            Optional[plt.Figure]: Matplotlib figure object with the plot, or None if no data available
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        df = self.calculate_integrated_dose(best_altitude, dose_type)
+        if df is None: return None
+        args = {'plot_title': f'Integrated {dose_type} at {best_altitude} km', 
+                'dose_type': f'integrated_{dose_type}_uSv', 
+                'legend_label': f'Integrated {dose_type}'}
+        args.update(plot_kwargs)
+        
+        return plot_on_spherical_globe(df, **args)
+
+    def plot_peak_dose_rate_globe(self, altitude: Optional[float] = None, dose_type: str = 'edose',
+                                  show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Figure]:
+        """
+        Plot peak dose rate on 3D globe.
+        
+        Args:
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            dose_type (str, optional): Dose rate type to analyze. Defaults to 'edose'.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_on_spherical_globe function
+            
+        Returns:
+            Optional[plt.Figure]: Matplotlib figure object with the plot, or None if no data available
+        """
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+            
+        df = self.get_peak_dose_rate_map(best_altitude, dose_type)
+        if df is None: return None
+        args = {'plot_title': f'Peak {dose_type} at {best_altitude} km', 
+                'dose_type': f'peak_{dose_type}_uSv_hr', 
+                'legend_label': f'Peak {dose_type}'}
+        args.update(plot_kwargs)
+        
+        return plot_on_spherical_globe(df, **args)
+
+    def plot_map_at_time(self, timestamp: dt.datetime, altitude: Optional[float] = None, ax: Optional[plt.Axes] = None,
+                        nearest_ts: bool = True, show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Axes]:
+        """
+        Plot a 2D dose map at a given timestamp and altitude.
+        
+        Args:
+            timestamp (dt.datetime): Timestamp to plot
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            ax (Optional[plt.Axes], optional): Matplotlib axes to use for plotting. Defaults to None.
+            nearest_ts (bool, optional): If True, use nearest timestamp when exact not found. Defaults to True.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_dose_map function
+            
+        Returns:
+            Optional[plt.Axes]: Matplotlib axes object with the plot, or None if no data available
+        """
+        frame = self.get_dose_rate_frame(timestamp, nearest_ts)
+        if frame is None: return None
+        
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+        
+        if ax: plot_kwargs['ax'] = ax
+        
+        return frame.plot_dose_map(altitude=best_altitude, **plot_kwargs)
+
+    def plot_globe_at_time(self, timestamp: dt.datetime, altitude: Optional[float] = None, 
+                          nearest_ts: bool = True, show_monitors: bool = True, **plot_kwargs: Any) -> Optional[plt.Figure]:
+        """
+        Plot a 3D globe dose at a given timestamp and altitude.
+        
+        Args:
+            timestamp (dt.datetime): Timestamp to plot
+            altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
+            nearest_ts (bool, optional): If True, use nearest timestamp when exact not found. Defaults to True.
+            show_monitors (bool, optional): Whether to display neutron monitor locations. Defaults to True.
+                Note: Monitor plotting is only supported in AnisotropicMAIREPLUSevent.
+            **plot_kwargs: Additional keyword arguments passed to plot_on_globe function
+            
+        Returns:
+            Optional[plt.Figure]: Matplotlib figure object with the plot, or None if no data available
+        """
+        frame = self.get_dose_rate_frame(timestamp, nearest_ts)
+        if frame is None: return None
+        
+        best_altitude = self._get_best_altitude(altitude)
+        if best_altitude is None:
+            print("No altitude data available.")
+            return None
+            
+        if altitude is not None and abs(best_altitude - altitude) > 0.1:
+            print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
+        
+        return frame.plot_on_globe(altitude=best_altitude, **plot_kwargs)
+
+    def export_to_netcdf(self, filename: str) -> None:
+        """
+        Export all dose rates to a NetCDF file.
+        
+        Args:
+            filename (str): Path to output NetCDF file
+            
+        Returns:
+            None
+        """
+        if not self.dose_rates: 
+            print('No data to export')
+            return
+        # (existing netcdf logic can be called here via a helper or imported)
+        # for brevity, call AniMAIRE_event.export_to_netcdf if needed
+        AniMAIRE_event.export_to_netcdf(self, filename)
+
+    def get_all_timestamps(self) -> List[dt.datetime]:
+        """
+        Return a sorted list of all timestamps represented in the event.
+        
+        Returns:
+            List[dt.datetime]: List of datetime objects (sorted chronologically)
+        """
+        if not hasattr(self, 'dose_rates') or not self.dose_rates:
+            return []
+        return sorted(self.dose_rates.keys())
+
+    def _get_monitor_info(self):
+        """
+        Try to extract neutron monitor information from the event instance.
+        Returns a list of dicts with keys 'primary', 'secondary', 'normalisation', or a list of strings.
+        """
+        # Try AnisotropicMAIREPLUSevent style
+        if hasattr(self, 'get_processed_monitor_sets'):
+            try:
+                return self.get_processed_monitor_sets()
+            except Exception:
+                pass
+        # Try MAIREPLUS_event style (locations or names)
+        info = []
+        if hasattr(self, 'params'):
+            # Try to get monitor locations if present
+            for key in ['neutron_monitor_1_location', 'neutron_monitor_2_location', 'normalisation_monitor_location']:
+                if key in self.params:
+                    info.append(f"{key}: {self.params[key][0] if isinstance(self.params[key], list) else self.params[key]}")
+            return info if info else None
+        # Try direct attributes
+        for key in ['neutron_monitor_1_location', 'neutron_monitor_2_location', 'normalisation_monitor_location']:
+            if hasattr(self, key):
+                info.append(f"{key}: {getattr(self, key)}")
+        # Try nm_set attribute (if present)
+        if hasattr(self, 'nm_set'):
+            nm_set = getattr(self, 'nm_set')
+            try:
+                info.append(f"primary: {nm_set.get_primary().get_station_name()}")
+                info.append(f"secondary: {nm_set.get_secondary().get_station_name()}")
+                info.append(f"normalisation: {nm_set.get_normalisation().get_station_name()}")
+            except Exception:
+                pass
+        return info if info else None
+
+    def _get_monitor_locations(self) -> Optional[pd.DataFrame]:
+        """
+        Extract the locations of all neutron monitors used in this event.
+        
+        Returns:
+            Optional[pd.DataFrame]: DataFrame with columns (latitude, longitude, name, type) or None if no data available
+        """
+        locations = []
+        
+        # Try AnisotropicMAIREPLUSevent style
+        if hasattr(self, 'isotropic_dose_runs') and self.isotropic_dose_runs:
+            for nm_set in self.isotropic_dose_runs.keys():
+                try:
+                    # Extract primary monitor location
+                    try:
+                        lat, lon, alt = nm_set.get_primary().get_location()
+                        name = nm_set.get_primary().get_station_name()
+                        locations.append({
+                            'latitude': lat, 'longitude': lon, 'name': name, 'type': 'primary'
+                        })
+                    except Exception as e:
+                        print(f"Warning: Error extracting monitor locations: {e}")
+                    
+                    # Extract secondary monitor location
+                    try:
+                        lat, lon, alt = nm_set.get_secondary().get_location()
+                        name = nm_set.get_secondary().get_station_name()
+                        locations.append({
+                            'latitude': lat, 'longitude': lon, 'name': name, 'type': 'secondary'
+                        })
+                    except Exception as e:
+                        print(f"Warning: Error extracting monitor locations: {e}")
+                    
+                    # Extract normalization monitor location
+                    try:
+                        lat, lon, alt = nm_set.get_normalisation().get_location()
+                        name = nm_set.get_normalisation().get_station_name()
+                        locations.append({
+                            'latitude': lat, 'longitude': lon, 'name': name, 'type': 'normalisation'
+                        })
+                    except Exception as e:
+                        print(f"Warning: Error extracting monitor locations: {e}")
+                except Exception as e:
+                    print(f"Warning: Error extracting monitor locations: {e}")
+        
+        # Try MAIREPLUS_event style
+        elif hasattr(self, 'params'):
+            for key, type_name in [
+                ('neutron_monitor_1_location', 'primary'),
+                ('neutron_monitor_2_location', 'secondary'),
+                ('normalisation_monitor_location', 'normalisation')
+            ]:
+                if key in self.params and self.params[key] is not None:
+                    loc = self.params[key]
+                    if isinstance(loc, (list, tuple)) and len(loc) >= 2:
+                        locations.append({
+                            'latitude': loc[0], 'longitude': loc[1], 
+                            'name': f"{type_name} monitor", 'type': type_name
+                        })
+                    elif isinstance(loc, dict) and 'latitude' in loc and 'longitude' in loc:
+                        locations.append({
+                            'latitude': loc['latitude'], 'longitude': loc['longitude'],
+                            'name': f"{type_name} monitor", 'type': type_name
+                        })
+        
+        # If we found monitors, convert to DataFrame
+        if locations:
+            df = pd.DataFrame(locations)
+            # Sort by type priority (primary > secondary > normalisation) and drop duplicates keeping first occurrence
+            type_priority = {'primary': 0, 'secondary': 1, 'normalisation': 2}
+            df['type_priority'] = df['type'].map(type_priority)
+            df = df.sort_values('type_priority').drop_duplicates(subset=['latitude', 'longitude'])
+            df = df.drop('type_priority', axis=1)
+            
+            # Normalize longitudes from 0-360 to -180 to +180
+            df['longitude'] = df['longitude'].apply(lambda x: ((x + 180) % 360) - 180)
+            
+            return df
+        return None
+
+    def plot_timeseries_at_location(self, latitude: float, longitude: float, altitude: float, 
+                                   dose_type: str = 'edose', ax: Optional[plt.Axes] = None,
+                                   nearest_ts: bool = True, interpolation_method: str = 'linear', 
+                                   **plot_kwargs: Any) -> Optional[plt.Axes]:
+        """
+        Plot time series of dose at a specific location.
+        
+        Args:
+            latitude (float): Geographic latitude in degrees
+            longitude (float): Geographic longitude in degrees
+            altitude (float): Altitude in kilometers
+            dose_type (str, optional): Dose rate type to plot. Defaults to 'edose'.
+            ax (Optional[plt.Axes], optional): Matplotlib axes to use for plotting. Defaults to None.
+            nearest_ts (bool, optional): If True, use nearest timestamp when exact not found. Defaults to True.
+            interpolation_method (str, optional): Method for spatial interpolation. Defaults to 'linear'.
+            **plot_kwargs: Additional keyword arguments passed to plot function
+            
+        Returns:
+            Optional[plt.Axes]: Matplotlib axes object with the plot, or None if no data available
+        """
+        times = sorted(self.dose_rates.keys()); vals = []; tlist = []
+        for ts in times:
+            d = self.get_dose_rate_at_location(latitude, longitude, altitude, ts, dose_type, nearest_ts, interpolation_method)
+            if d is not None: vals.append(d); tlist.append(ts)
+        if not vals: return None
+        if ax is None: fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(tlist, vals, label=dose_type, marker='o')
+        ax.set_xlabel('Time (UTC)'); ax.set_ylabel(f'{dose_type} (uSv/hr)'); ax.legend(); ax.grid(True); plt.gcf().autofmt_xdate()
+        return ax
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """
+        Concatenate all dose rate frames in the event into a single DataFrame, adding a 'timestamp' column for each row.
+        
+        Returns:
+            pd.DataFrame: Combined DataFrame of all dose rate frames with an added 'timestamp' column.
+        """
+        if not hasattr(self, 'dose_rates') or not self.dose_rates:
+            print("No dose rate data available. Run run_AniMAIRE() first.")
+            return pd.DataFrame()
+        frames = []
+        for ts, frame in self.dose_rates.items():
+            df = pd.DataFrame(frame).copy()
+            df['timestamp'] = ts
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True)
+
+class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
+    """
+    Event class for modeling solar particle events using double power-law rigidity spectrum and Gaussian pitch-angle distribution.
+    
+    This class handles the simulation of solar energetic particle events based on parameterized spectral
+    data. It loads spectrum data from a CSV file, formats it appropriately, and provides methods
+    to run the AniMAIRE simulations.
+    
+    Required input CSV format (columns):
+      - Time: str or datetime (UTC) per spectrum row
+      - J_0: float, normalization constant (particles/cm²/s/sr/GV)
+      - gamma: float, spectral index for low rigidity part
+      - d_gamma: float, modification to spectral index at higher rigidities
+      - Sigma1: float, first Gaussian sigma for pitch-angle distribution (radians)
+      - Sigma2: float, second Gaussian sigma for pitch-angle distribution (radians)
+      - B: float, scaling factor for second Gaussian component
+      - SymLat: float, reference pitch-angle latitude (GEO coords, degrees)
+      - SymLong: float, reference pitch-angle longitude (GEO coords, degrees)
+    
+    Optional:
+      - alpha_prime: float, default = math.pi (maximum pitch angle in radians)
+      
+    Attributes:
+        spectra_file_path (str): Path to the CSV file containing spectral data
+        raw_spectra_data (pd.DataFrame): Raw data loaded from the CSV file
+        spectra (pd.DataFrame): Formatted spectral data used for simulations
+        dose_rates (Dict[dt.datetime, DoseRateFrame]): Results from the simulation
+    """
+    
+    def __init__(self, spectra_file_path: str) -> None:
+        """
+        Initialize an event with a spectral data file.
+        
+        Args:
+            spectra_file_path (str): Path to the CSV file containing spectral data for the event
+        """
+        super().__init__()
+        self.spectra_file_path: str = spectra_file_path
+        self.raw_spectra_data: pd.DataFrame = pd.read_csv(spectra_file_path)
+        self.spectra: pd.DataFrame = self.correctly_formatted_spectra()
+
+    def correctly_formatted_spectra(self) -> pd.DataFrame:
+        """
+        Format the input spectral data to match AniMAIRE's expected format.
+        
+        Handles column renaming, datetime conversion, and adds default values for missing columns.
+        
+        Returns:
+            pd.DataFrame: Correctly formatted spectra data
+        """
         # Map the columns from the input file to the expected AniMAIRE format
         # Based on the GLE74 Spectra_reformatted.csv file structure
         column_mapping = {
@@ -176,217 +1127,31 @@ class AniMAIRE_event():
         
         return self.spectra
     
-    def summarize_spectra(self):
-        """Provides a summary of the input spectral data."""
-        if not hasattr(self, 'spectra') or self.spectra is None:
-            print("Spectra data not loaded or formatted yet.")
-            return None
+    def run_AniMAIRE(self, n_timestamps: Optional[int] = None, use_cache: bool = True, 
+                    **kwargs: Any) -> Dict[dt.datetime, DoseRateFrame]:
+        """
+        Run AniMAIRE simulation for each timestamp in the spectral data.
+        
+        Processes each row of the spectral data to calculate dose rates at different
+        locations and altitudes based on the parameterized particle spectrum.
+        
+        Args:
+            n_timestamps (Optional[int], optional): Limit the number of timestamps to process. 
+                                                   Useful for testing. Defaults to None (all timestamps).
+            use_cache (bool, optional): Whether to use cached results for identical parameter sets. 
+                                       Defaults to True.
+            **kwargs: Additional keyword arguments passed to run_from_double_power_law_gaussian_distribution
             
-        summary = {
-            "Number of Timestamps": len(self.spectra),
-            "Time Range (UTC)": (self.spectra['datetime'].min(), self.spectra['datetime'].max()),
-            "Parameter Ranges": {}
-        }
-        
-        param_cols = ['J0', 'gamma', 'deltaGamma', 'sigma_1', 'sigma_2', 'B', 
-                      'alpha_prime', 'reference_pitch_angle_latitude', 
-                      'reference_pitch_angle_longitude']
-                      
-        for col in param_cols:
-            if col in self.spectra.columns:
-                summary["Parameter Ranges"][col] = (self.spectra[col].min(), self.spectra[col].max())
-                
-        print("--- Input Spectra Summary ---")
-        print(f"Number of Timestamps: {summary['Number of Timestamps']}")
-        print(f"Time Range (UTC): {summary['Time Range (UTC)'][0]} to {summary['Time Range (UTC)'][1]}")
-        print("Parameter Ranges:")
-        for param, (min_val, max_val) in summary["Parameter Ranges"].items():
-            print(f"  {param}: {min_val:.2e} to {max_val:.2e}")
-        print("---------------------------")
-            
-        return summary
-
-    def summarize_results(self):
-        """Provides a comprehensive summary of the calculated dose rate results across all dose types."""
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("AniMAIRE simulation results not available. Run run_AniMAIRE() first.")
-            return None
-
-        timestamps = sorted(self.dose_rates.keys())
-        first_frame = self.dose_rates[timestamps[0]]
-        
-        # Get a list of all dose rate columns
-        # Standard dose rate columns from the README
-        expected_dose_columns = {
-            'edose': 'effective dose in µSv/hr',
-            'adose': 'ambient dose equivalent in µSv/hr',
-            'dosee': 'dose equivalent in µSv/hr',
-            'tn1': '>1 MeV neutron flux in n/cm2/s',
-            'tn2': '>10 MeV neutron flux in n/cm2/s',
-            'tn3': '>60 MeV neutron flux in n/cm2/s',
-            'SEU': 'single event upset rate in upsets/second/bit',
-            'SEL': 'single event latch-up rate in latch-ups/second/device'
-        }
-        
-        # Find which of the expected dose columns actually exist in the data
-        available_dose_columns = [col for col in expected_dose_columns.keys() 
-                               if col in first_frame.columns]
-        
-        # Also check for any derived columns that might be present
-        derived_columns = [col for col in first_frame.columns 
-                         if any(col.startswith(f"{base} ") for base in ['SEU', 'SEL'])]
-        
-        # Combine all dose rate columns
-        dose_columns = available_dose_columns + derived_columns
-        
-        if not dose_columns:
-            print("No dose rate columns found in the results.")
-            return None
-        
-        # Dictionary to store peak values, times, and locations for each dose type
-        dose_summaries = {}
-        
-        for dose_col in dose_columns:
-            peak_dose_rate = 0.0
-            time_of_peak = None
-            location_of_peak = None  # (lat, lon, alt)
-            total_dose_rates = []  # Store all dose rates to find overall peak
-            
-            # Create a friendly name for the dose column
-            if dose_col in expected_dose_columns:
-                column_description = expected_dose_columns[dose_col]
-            elif dose_col.startswith('SEU ('):
-                column_description = dose_col  # Use the full name for derived columns
-            elif dose_col.startswith('SEL ('):
-                column_description = dose_col
-            else:
-                column_description = f"dose rate ({dose_col})"
-
-            for ts, frame in self.dose_rates.items():
-                if dose_col not in frame.columns:
-                    continue
-                    
-                # Find peak dose rate in the current frame
-                current_peak = frame[dose_col].max()
-                total_dose_rates.append(current_peak)  # Collect peak from each frame for stats
-                
-                if current_peak > peak_dose_rate:
-                    peak_dose_rate = current_peak
-                    time_of_peak = ts
-                    
-                    try:
-                        # Find the row with the max value
-                        max_row = frame.loc[frame[dose_col].idxmax()]
-                        
-                        # Get location info directly from the row
-                        if 'latitude' in max_row and 'longitude' in max_row and 'altitude (km)' in max_row:
-                            location_of_peak = (
-                                max_row['latitude'],
-                                max_row['longitude'],
-                                max_row['altitude (km)']
-                            )
-                        else:
-                            # Alternative approach if the dataframe structure is different
-                            # Try using unravel_index but with better error handling
-                            arr = frame[dose_col].values
-                            peak_idx = np.argmax(arr)
-                            
-                            # Get the shape to determine dimensionality
-                            arr_shape = arr.shape
-                            
-                            if len(arr_shape) >= 2:  # If we have a 2D or higher array
-                                peak_indices = np.unravel_index(peak_idx, arr_shape)
-                                
-                                # Only try to access indices if they exist
-                                lat_idx = peak_indices[0] if len(peak_indices) > 0 else 0
-                                lon_idx = peak_indices[1] if len(peak_indices) > 1 else 0
-                                
-                                # Make sure we don't index out of bounds
-                                if hasattr(frame, 'latitude') and hasattr(frame, 'longitude'):
-                                    latitudes = frame.latitude.unique()
-                                    longitudes = frame.longitude.unique()
-                                    
-                                    if lat_idx < len(latitudes) and lon_idx < len(longitudes):
-                                        location_of_peak = (
-                                            latitudes[lat_idx],
-                                            longitudes[lon_idx],
-                                            frame['altitude (km)'].iloc[0] if 'altitude (km)' in frame.columns else None
-                                        )
-                            else:
-                                # For 1D data, get location from the row
-                                if isinstance(frame.index, pd.MultiIndex):
-                                    # If we have a MultiIndex, try to get lat/lon from there
-                                    idx = frame.index[peak_idx]
-                                    location_of_peak = (
-                                        idx[0] if 'latitude' in frame.index.names else None,
-                                        idx[1] if 'longitude' in frame.index.names else None,
-                                        frame['altitude (km)'].iloc[0] if 'altitude (km)' in frame.columns else None
-                                    )
-                    except Exception as e:
-                        print(f"Warning: Could not determine peak location for {dose_col}: {e}")
-                        location_of_peak = None
-
-            dose_summaries[dose_col] = {
-                "Peak Value": peak_dose_rate,
-                "Time of Peak": time_of_peak,
-                "Location of Peak": location_of_peak,
-                "Description": column_description
-            }
-
-        # Create general summary
-        summary = {
-            "Number of Timestamps": len(timestamps),
-            "Time Range (UTC)": (timestamps[0], timestamps[-1]),
-            "Altitude (km)": first_frame["altitude (km)"].iloc[0] if "altitude (km)" in first_frame.columns else None,
-            "Latitude Range (deg)": (first_frame.latitude.min(), first_frame.latitude.max()) if "latitude" in first_frame.columns else None,
-            "Longitude Range (deg)": (first_frame.longitude.min(), first_frame.longitude.max()) if "longitude" in first_frame.columns else None,
-            "Dose Summaries": dose_summaries
-        }
-        
-        # Print summary to console
-        print("--- Simulation Results Summary ---")
-        print(f"Number of Timestamps Processed: {summary['Number of Timestamps']}")
-        print(f"Time Range (UTC): {summary['Time Range (UTC)'][0]} to {summary['Time Range (UTC)'][1]}")
-        
-        if summary['Altitude (km)'] is not None:
-            print(f"Altitude (km): {summary['Altitude (km)']:.3f}")
-            
-        if summary['Latitude Range (deg)'] is not None:
-            print(f"Latitude Range (deg): {summary['Latitude Range (deg)'][0]} to {summary['Latitude Range (deg)'][1]}")
-            
-        if summary['Longitude Range (deg)'] is not None:
-            print(f"Longitude Range (deg): {summary['Longitude Range (deg)'][0]} to {summary['Longitude Range (deg)'][1]}")
-        
-        print("\nDose Rate Summaries:")
-        for dose_col, dose_info in summary["Dose Summaries"].items():
-            print(f"\n{dose_col} ({dose_info['Description']}):")
-            print(f"  Peak Value: {dose_info['Peak Value']:.3e}")
-            
-            if dose_info['Time of Peak']:
-                print(f"  Time of Peak: {dose_info['Time of Peak']}")
-                
-            if dose_info['Location of Peak']:
-                peak_loc = dose_info['Location of Peak']
-                loc_str = "  Location of Peak: "
-                if peak_loc[0] is not None:
-                    loc_str += f"Lat {peak_loc[0]:.2f}, "
-                if peak_loc[1] is not None:
-                    loc_str += f"Lon {peak_loc[1]:.2f}, "
-                if peak_loc[2] is not None:
-                    loc_str += f"Alt {peak_loc[2]:.3f} km"
-                print(loc_str)
-                
-        print("------------------------------")
-
-        return summary
-
-    def run_AniMAIRE(self, n_timestamps: int = None, use_cache: bool = True, **kwargs):
-        # Run AniMAIRE
-
+        Returns:
+            Dict[dt.datetime, DoseRateFrame]: Dictionary of dose rate frames keyed by timestamp
+        """
+        # Initialize the dose_rates dictionary
         self.dose_rates = {}  # Use dictionary instead of list
+        
+        # Process each spectrum in the input data
         for index, spectrum in self.spectra.iterrows():
 
-            # Run AniMAIRE
+            # Display progress information
             total_spectra = len(self.spectra)
             percentage_complete = (index / total_spectra) * 100
             print(f"Running AniMAIRE for spectrum {index} ({percentage_complete:.1f}% complete)")
@@ -395,7 +1160,7 @@ class AniMAIRE_event():
             
             # Determine whether to use caching or not
             if use_cache:
-                # Use Streamlit's cached function
+                # Use cached function to avoid recomputing identical parameter sets
                 output_dose_rate = run_animaire_cached(
                     J0=spectrum['J0'],
                     gamma=spectrum['gamma'],
@@ -438,962 +1203,48 @@ class AniMAIRE_event():
                     break
 
         return self.dose_rates
-    
-    def get_available_altitudes(self):
-        """
-        Get all unique altitude values available across all dose rate frames.
 
-        Returns:
-        --------
-        list
-            Sorted list of unique altitude values in km across all frames
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("No dose rate data available. Run run_AniMAIRE() first.")
-            return []
-            
-        # Get a set of all altitudes from all timestamps
-        all_altitudes = set()
-        for ts, frame in self.dose_rates.items():
-            frame_altitudes = frame.get_altitudes()
-            all_altitudes.update(frame_altitudes)
-            
-        return sorted(all_altitudes)
-    
-    def create_gle_map_animation(self, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
-        return create_gle_map_animation(self.dose_rates, altitude, save_gif, save_mp4, **kwargs)
-    
-    def create_gle_globe_animation(self, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
-        return create_gle_globe_animation(self.dose_rates, altitude, save_gif, save_mp4, **kwargs)
-    
-    def create_spectra_animation(gle_object, output_filename='GLE74_spectra_animation.mp4', fps=2, 
-                                spectra_xlim=(0.1, 20), spectra_ylim=(1e-16, 1e14), **kwargs):
-        """
-        Create an animation showing the evolution of rigidity spectra over time.
-        
-        Parameters:
-        -----------
-        gle_object : GLEObject
-            The GLE object containing dose rate frames
-        output_filename : str
-            Filename for the output animation
-        fps : int
-            Frames per second for the animation
-        spectra_xlim : tuple
-            x-axis limits (min, max) for the spectra plot (Rigidity in GV)
-        spectra_ylim : tuple
-            y-axis limits (min, max) for the spectra plot (Flux)
-        **kwargs : dict
-            Additional keyword arguments to pass to the plotting functions
-        """
-        # Get the timestamps in chronological order
-        timestamps = sorted(gle_object.dose_rates.keys())
-        
-        # Create the figure
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Function to update the plot for each frame
-        def update(frame):
-            # Clear previous plot
-            ax.clear()
-            
-            # Get the timestamp and dose rate frame for this animation frame
-            timestamp = timestamps[frame]
-            dose_rate_frame = gle_object.dose_rates[timestamp]
-            
-            # Plot the spectra
-            dose_rate_frame.plot_spectra(ax=ax, **kwargs)
-            ax.set_title(f'Rigidity Spectra at {timestamp.strftime("%Y-%m-%d %H:%M")}')
-            ax.set_xlim(spectra_xlim)
-            ax.set_ylim(spectra_ylim)
-            
-            return ax,
-        
-        # Create the animation
-        ani = animation.FuncAnimation(
-            fig, update, frames=len(timestamps), blit=False, interval=1000/fps
-        )
-        
-        # Save the animation
-        ani.save(output_filename, writer='ffmpeg', fps=fps)
-        plt.close(fig)
-        
-        # Display the animation in the notebook
-        return HTML(ani.to_jshtml())
+# Legacy alias for backward compatibility
+AniMAIRE_event = DoublePowerLawGaussianEvent
 
-
-    def create_pad_animation(gle_object, output_filename='GLE74_pad_animation.mp4', fps=2, 
-                            pad_xlim=(0, 3.14), pad_ylim=(0, 1.2), **kwargs):
-        """
-        Create an animation showing the evolution of pitch angle distributions over time.
-        
-        Parameters:
-        -----------
-        gle_object : GLEObject
-            The GLE object containing dose rate frames
-        output_filename : str
-            Filename for the output animation
-        fps : int
-            Frames per second for the animation
-        pad_xlim : tuple
-            x-axis limits (min, max) for the pitch angle distribution plot (radians)
-        pad_ylim : tuple
-            y-axis limits (min, max) for the pitch angle distribution plot (relative intensity)
-        **kwargs : dict
-            Additional keyword arguments to pass to the plotting functions
-        """
-        # Get the timestamps in chronological order
-        timestamps = sorted(gle_object.dose_rates.keys())
-        
-        # Create the figure
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Function to update the plot for each frame
-        def update(frame):
-            # Clear previous plot
-            ax.clear()
-            
-            # Get the timestamp and dose rate frame for this animation frame
-            timestamp = timestamps[frame]
-            dose_rate_frame = gle_object.dose_rates[timestamp]
-            
-            # Plot the pitch angle distribution
-            dose_rate_frame.plot_pitch_angle_distributions(ax=ax, **kwargs)
-            ax.set_title(f'Pitch Angle Distributions at {timestamp.strftime("%Y-%m-%d %H:%M")}')
-            ax.set_xlim(pad_xlim)
-            ax.set_ylim(pad_ylim)
-            
-            return ax,
-        
-        # Create the animation
-        ani = animation.FuncAnimation(
-            fig, update, frames=len(timestamps), blit=False, interval=1000/fps
-        )
-        
-        # Save the animation
-        ani.save(output_filename, writer='ffmpeg', fps=fps)
-        plt.close(fig)
-        
-        # Display the animation in the notebook
-        return HTML(ani.to_jshtml())
-
-
-    def create_combined_animation(gle_object, output_filename='GLE74_combined_animation.mp4', fps=2, 
-                                spectra_xlim=(0.1, 20), spectra_ylim=(1e-16, 1e14), 
-                                pad_xlim=(0, 3.14), pad_ylim=(0, 1.2), **kwargs):
-        """
-        Create an animation showing the evolution of both rigidity spectra and pitch angle distributions over time.
-        
-        Parameters:
-        -----------
-        gle_object : GLEObject
-            The GLE object containing dose rate frames
-        output_filename : str
-            Filename for the output animation
-        fps : int
-            Frames per second for the animation
-        spectra_xlim : tuple
-            x-axis limits (min, max) for the spectra plot (Rigidity in GV)
-        spectra_ylim : tuple
-            y-axis limits (min, max) for the spectra plot (Flux)
-        pad_xlim : tuple
-            x-axis limits (min, max) for the pitch angle distribution plot (radians)
-        pad_ylim : tuple
-            y-axis limits (min, max) for the pitch angle distribution plot (relative intensity)
-        **kwargs : dict
-            Additional keyword arguments to pass to the plotting functions
-        """
-        # Get the timestamps in chronological order
-        timestamps = sorted(gle_object.dose_rates.keys())
-        
-        # Create the figure and subplots
-        fig = plt.figure(figsize=(12, 5))
-        gs = GridSpec(1, 2, figure=fig)
-        ax1 = fig.add_subplot(gs[0, 0])  # For spectra
-        ax2 = fig.add_subplot(gs[0, 1])  # For pitch angle distributions
-        
-        # Function to update the plot for each frame
-        def update(frame):
-            # Clear previous plots
-            ax1.clear()
-            ax2.clear()
-            
-            # Get the timestamp and dose rate frame for this animation frame
-            timestamp = timestamps[frame]
-            dose_rate_frame = gle_object.dose_rates[timestamp]
-            
-            # Plot the spectra on the left subplot
-            dose_rate_frame.plot_spectra(ax=ax1, **kwargs)
-            ax1.set_title(f'Rigidity Spectra at {timestamp.strftime("%Y-%m-%d %H:%M")}')
-            ax1.set_xlim(spectra_xlim)
-            ax1.set_ylim(spectra_ylim)
-            
-            # Plot the pitch angle distribution on the right subplot
-            dose_rate_frame.plot_pitch_angle_distributions(ax=ax2, **kwargs)
-            ax2.set_title(f'Pitch Angle Distributions at {timestamp.strftime("%Y-%m-%d %H:%M")}')
-            ax2.set_xlim(pad_xlim)
-            ax2.set_ylim(pad_ylim)
-            
-            # Add a main title
-            plt.suptitle(f'timestamp - {timestamp.strftime("%Y-%m-%d %H:%M")}', fontsize=14)
-            
-            return ax1, ax2
-        
-        # Create the animation
-        ani = animation.FuncAnimation(
-            fig, update, frames=len(timestamps), blit=False, interval=1000/fps
-        )
-        
-        # Save the animation
-        ani.save(output_filename, writer='ffmpeg', fps=fps)
-        plt.close(fig)
-        
-        # Display the animation in the notebook
-        return HTML(ani.to_jshtml())
-
-    # --- Data Access Methods ---
-
-    def get_dose_rate_frame(self, timestamp: dt.datetime, nearest: bool = True) -> DoseRateFrame | None:
-        """
-        Retrieves the DoseRateFrame for a specific timestamp or the nearest one.
-
-        Args:
-            timestamp: The target timestamp.
-            nearest: If True, find the nearest available timestamp if the exact one is not found. 
-                     If False, return None if the exact timestamp is missing.
-
-        Returns:
-            The DoseRateFrame corresponding to the timestamp, or None.
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("Warning: No dose rate data available. Run run_AniMAIRE first.")
-            return None
-
-        if timestamp in self.dose_rates:
-            return self.dose_rates[timestamp]
-        elif nearest:
-            available_times = np.array(sorted(self.dose_rates.keys()))
-            # Convert target timestamp and available times to numerical representation for comparison
-            target_ts_num = timestamp.timestamp()
-            available_times_num = np.array([t.timestamp() for t in available_times])
-            
-            nearest_idx = np.argmin(np.abs(available_times_num - target_ts_num))
-            nearest_time = available_times[nearest_idx]
-            print(f"Warning: Exact timestamp {timestamp} not found. Using nearest: {nearest_time}")
-            return self.dose_rates[nearest_time]
-        else:
-            print(f"Warning: Exact timestamp {timestamp} not found.")
-            return None
-
-    def get_dose_rate_at_location(self, latitude: float, longitude: float, altitude: float, timestamp: dt.datetime, dose_type: str = 'edose', nearest_ts: bool = True, interpolation_method: str = 'linear') -> float | None:
-        """
-        Retrieves the interpolated dose rate at a specific geographic location, altitude, and time.
-
-        Args:
-            latitude: Target latitude in degrees.
-            longitude: Target longitude in degrees.
-            altitude: Target altitude in km.
-            timestamp: Target timestamp.
-            dose_type: The name of the dose rate column to interpolate (e.g., 'edose', 'adose'). Defaults to 'edose'.
-            nearest_ts: If True, use the nearest available timestamp if the exact one is not found.
-            interpolation_method: Method for griddata ('linear', 'nearest', 'cubic'). Default is 'linear'.
-
-        Returns:
-            The interpolated dose rate in uSv/hr, or None if data is unavailable or interpolation fails.
-        """
-        frame = self.get_dose_rate_frame(timestamp, nearest=nearest_ts)
-        if frame is None:
-            return None # Message already printed by get_dose_rate_frame
-
-        # Filter data near the target altitude (using pandas query for efficiency)
-        # Use a small tolerance if altitudes might not match exactly
-        alt_tolerance = 0.1 # Adjust tolerance as needed based on altitude grid spacing
-        data_at_alt = frame.query(f"`altitude (km)` >= {altitude - alt_tolerance} and `altitude (km)` <= {altitude + alt_tolerance}")
-        
-        if data_at_alt.empty:
-             print(f"Warning: No data found near altitude {altitude} km for timestamp {frame.timestamp}.")
-             # Optional: Could try interpolating between altitude layers if available
-             return None
-
-        # If multiple altitude layers match within tolerance, maybe take the closest one or average?
-        # For simplicity, let's take the one closest to the target altitude if multiple exist.
-        if data_at_alt['altitude (km)'].nunique() > 1:
-             closest_alt = data_at_alt.iloc[(data_at_alt['altitude (km)'] - altitude).abs().argsort()]['altitude (km)'].iloc[0]
-             data_at_alt = data_at_alt[data_at_alt['altitude (km)'] == closest_alt]
-
-        if data_at_alt.empty: # Check again after potential filtering
-            print(f"Warning: No data points remaining after altitude selection for timestamp {frame.timestamp}.")
-            return None
-
-        # Prepare data for interpolation
-        points = data_at_alt[['latitude', 'longitude']].values
-        if dose_type not in data_at_alt.columns:
-            print(f"Error: Specified dose_type '{dose_type}' not found in DataFrame columns: {data_at_alt.columns}")
-            return None
-        values = data_at_alt[dose_type].values 
-        target_point = (latitude, longitude)
-
-        try:
-            # Perform 2D interpolation using griddata
-            interpolated_dose = griddata(points, values, target_point, method=interpolation_method)
-            
-            if np.isnan(interpolated_dose):
-                # Handle cases where interpolation returns NaN (e.g., target outside convex hull for linear/cubic)
-                # Try nearest neighbor as a fallback?
-                print(f"Warning: Interpolation ({interpolation_method}) resulted in NaN for Lat={latitude}, Lon={longitude} at {frame.timestamp}. Target might be outside data coverage.")
-                # Optional: Fallback to nearest neighbor
-                # interpolated_dose = griddata(points, values, target_point, method='nearest')
-                # if np.isnan(interpolated_dose):
-                #     print("Fallback interpolation ('nearest') also failed.")
-                #     return None
-                return None # Return None if primary interpolation fails
-
-            return float(interpolated_dose)
-        except Exception as e:
-            print(f"Error during interpolation at {frame.timestamp} for Lat={latitude}, Lon={longitude}: {e}")
-            return None
-
-    # --- Analysis Methods ---
-
-    def _get_target_grid(self, target_grid=None, n_lat=90, n_lon=180):
-        """ Helper to define the target grid for interpolation. """
-        if target_grid is not None:
-            return target_grid # Use user-provided grid
-            
-        # If no grid provided, create a default global grid
-        latitudes = np.linspace(-90, 90, n_lat)
-        longitudes = np.linspace(-180, 180, n_lon)
-        lon_grid, lat_grid = np.meshgrid(longitudes, latitudes)
-        target_grid_points = np.vstack([lat_grid.ravel(), lon_grid.ravel()]).T
-        return target_grid_points
-        
-    def _calculate_time_deltas(self):
-        """ Helper to calculate time intervals between frames in hours. """
-        timestamps = sorted(self.dose_rates.keys())
-        if len(timestamps) < 2:
-            # Assume a default duration (e.g., 1 hour) if only one frame
-            # Or handle this case based on desired behavior
-            return np.array([1.0]) if len(timestamps) == 1 else np.array([]) 
-            
-        # Calculate time differences in seconds
-        time_diffs_sec = np.diff([ts.timestamp() for ts in timestamps])
-        
-        # Use trapezoidal rule: dt for a point is the average of the intervals before and after it
-        dt_sec = np.zeros(len(timestamps))
-        dt_sec[0] = time_diffs_sec[0] / 2
-        dt_sec[-1] = time_diffs_sec[-1] / 2
-        dt_sec[1:-1] = (time_diffs_sec[:-1] + time_diffs_sec[1:]) / 2
-        
-        # Convert deltas to hours
-        dt_hours = dt_sec / 3600.0
-        return dt_hours
-
-    def calculate_integrated_dose(self, altitude: float, dose_type: str = 'edose') -> pd.DataFrame | None:
-        """
-        Calculates the total integrated dose (in uSv) over the event duration
-        on the native grid points at a specific altitude, for a given dose type.
-        Assumes the spatial grid is consistent across all timestamps.
-
-        Args:
-            altitude: The altitude (in km) for which to calculate integrated dose.
-            dose_type: The name of the dose rate column to integrate (e.g., 'edose', 'adose'). Defaults to 'edose'.
-
-        Returns:
-            A pandas DataFrame with columns ['latitude', 'longitude', 'integrated_<dose_type>_uSv'],
-            representing the dose integrated over time at each native grid point, or None if calculation fails.
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("Warning: No dose rate data available. Run run_AniMAIRE first.")
-            return None
-            
-        timestamps = sorted(self.dose_rates.keys())
-        if len(timestamps) < 1:
-             print("Warning: Need at least one dose rate frame to calculate integrated dose.")
-             return None
-
-        # --- Determine native grid and initialize accumulator --- 
-        first_frame = self.dose_rates[timestamps[0]]
-        # Filter first frame to get coordinates at the target altitude
-        alt_tolerance = 0.1 
-        data_at_alt_first = first_frame.query(f"`altitude (km)` >= {altitude - alt_tolerance} and `altitude (km)` <= {altitude + alt_tolerance}")
-        if data_at_alt_first.empty:
-            print(f"Warning: No data found near altitude {altitude} km in the first frame. Cannot determine grid.")
-            return None
-        if data_at_alt_first['altitude (km)'].nunique() > 1:
-            closest_alt = data_at_alt_first.iloc[(data_at_alt_first['altitude (km)'] - altitude).abs().argsort()]['altitude (km)'].iloc[0]
-            data_at_alt_first = data_at_alt_first[data_at_alt_first['altitude (km)'] == closest_alt]
-        if data_at_alt_first.empty:
-             print(f"Warning: No data points remaining after altitude selection in the first frame. Cannot determine grid.")
-             return None
-             
-        # Use lat/lon from the filtered first frame as the reference grid index
-        native_index = pd.MultiIndex.from_frame(data_at_alt_first[['latitude', 'longitude']])
-        integrated_dose_series = pd.Series(0.0, index=native_index, dtype=float) # Accumulator Series
-        # --- End Grid Determination --- 
-        
-        dt_hours = self._calculate_time_deltas()
-        if len(dt_hours) != len(timestamps):
-             print("Error: Mismatch between number of timestamps and calculated time deltas.")
-             return None
-
-        print(f"Calculating integrated {dose_type} dose at {altitude} km on native grid...")
-        for i, timestamp in enumerate(tqdm(timestamps)):
-            frame = self.dose_rates[timestamp]
-            
-            # Filter data near the target altitude
-            data_at_alt = frame.query(f"`altitude (km)` >= {altitude - alt_tolerance} and `altitude (km)` <= {altitude + alt_tolerance}")
-            if data_at_alt.empty:
-                # print(f"Warning: No data found near altitude {altitude} km for timestamp {timestamp}. Skipping frame.")
-                continue # Silently skip frame if no data at target alt
-            if data_at_alt['altitude (km)'].nunique() > 1:
-                closest_alt = data_at_alt.iloc[(data_at_alt['altitude (km)'] - altitude).abs().argsort()]['altitude (km)'].iloc[0]
-                data_at_alt = data_at_alt[data_at_alt['altitude (km)'] == closest_alt]
-            if data_at_alt.empty:
-                continue
-                
-            if dose_type not in data_at_alt.columns:
-                 print(f"Warning: Specified dose_type '{dose_type}' not found in frame at {timestamp}. Skipping frame contribution.")
-                 continue
-                 
-            # Prepare current frame's data with the native index for alignment
-            current_frame_series = data_at_alt.set_index(['latitude', 'longitude'])[dose_type]
-            
-            # Align with the accumulator series (add 0 for missing points in current frame) and add contribution
-            integrated_dose_series = integrated_dose_series.add(current_frame_series * dt_hours[i], fill_value=0.0)
-
-        # Create result DataFrame
-        output_col_name = f'integrated_{dose_type}_uSv'
-        result_df = integrated_dose_series.reset_index()
-        result_df.rename(columns={0: output_col_name}, inplace=True)
-            
-        return result_df
-
-    def get_peak_dose_rate_map(self, altitude: float, dose_type: str = 'edose') -> pd.DataFrame | None:
-        """
-        Finds the maximum dose rate experienced at each native grid point over the event duration
-        at a specific altitude, for a given dose type.
-        Assumes the spatial grid is consistent across all timestamps.
-
-        Args:
-            altitude: The altitude (in km) to analyze.
-            dose_type: The name of the dose rate column to analyze (e.g., 'edose', 'adose'). Defaults to 'edose'.
-
-        Returns:
-            A pandas DataFrame with columns ['latitude', 'longitude', 'peak_<dose_type>_uSv_hr'],
-            representing the peak dose rate at each native grid point, or None if calculation fails.
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("Warning: No dose rate data available. Run run_AniMAIRE first.")
-            return None
-            
-        timestamps = sorted(self.dose_rates.keys())
-        if not timestamps:
-             print("Warning: No timestamps available.")
-             return None
-
-        # --- Determine native grid and initialize accumulator --- 
-        first_frame = self.dose_rates[timestamps[0]]
-        alt_tolerance = 0.1 # Use same tolerance as before
-        data_at_alt_first = first_frame.query(f"`altitude (km)` >= {altitude - alt_tolerance} and `altitude (km)` <= {altitude + alt_tolerance}")
-        if data_at_alt_first.empty:
-            print(f"Warning: No data found near altitude {altitude} km in the first frame. Cannot determine grid.")
-            return None
-        if data_at_alt_first['altitude (km)'].nunique() > 1:
-            closest_alt = data_at_alt_first.iloc[(data_at_alt_first['altitude (km)'] - altitude).abs().argsort()]['altitude (km)'].iloc[0]
-            data_at_alt_first = data_at_alt_first[data_at_alt_first['altitude (km)'] == closest_alt]
-        if data_at_alt_first.empty:
-             print(f"Warning: No data points remaining after altitude selection in the first frame. Cannot determine grid.")
-             return None
-             
-        native_index = pd.MultiIndex.from_frame(data_at_alt_first[['latitude', 'longitude']])
-        peak_dose_series = pd.Series(-np.inf, index=native_index, dtype=float) # Accumulator Series, init with -inf
-        # --- End Grid Determination --- 
-
-        print(f"Calculating peak {dose_type} rate map at {altitude} km on native grid...")
-        for timestamp in tqdm(timestamps):
-            frame = self.dose_rates[timestamp]
-            
-            # Filter data near the target altitude
-            data_at_alt = frame.query(f"`altitude (km)` >= {altitude - alt_tolerance} and `altitude (km)` <= {altitude + alt_tolerance}")
-            if data_at_alt.empty:
-                continue # Silently skip frame
-            if data_at_alt['altitude (km)'].nunique() > 1:
-                closest_alt = data_at_alt.iloc[(data_at_alt['altitude (km)'] - altitude).abs().argsort()]['altitude (km)'].iloc[0]
-                data_at_alt = data_at_alt[data_at_alt['altitude (km)'] == closest_alt]
-            if data_at_alt.empty:
-                continue
-
-            if dose_type not in data_at_alt.columns:
-                 print(f"Warning: Specified dose_type '{dose_type}' not found in frame at {timestamp}. Skipping this frame.")
-                 continue
-                 
-            # Prepare current frame's data with the native index for alignment
-            current_frame_series = data_at_alt.set_index(['latitude', 'longitude'])[dose_type]
-            
-            # Align with the accumulator series (fill missing points with -inf) and update maximum
-            aligned_current, aligned_peak = current_frame_series.align(peak_dose_series, join='right', fill_value=-np.inf)
-            peak_dose_series = pd.Series(np.maximum(aligned_peak.values, aligned_current.values), index=peak_dose_series.index)
-        
-        # Replace any remaining -inf with NaN (points never covered by data)
-        peak_dose_series.replace(-np.inf, np.nan, inplace=True)
-        
-        # Create result DataFrame
-        output_col_name = f'peak_{dose_type}_uSv_hr'
-        result_df = peak_dose_series.reset_index()
-        result_df.rename(columns={0: output_col_name}, inplace=True)
-            
-        return result_df
-
-    # --- Plotting and Animation Methods ---
-
-    def plot_integrated_dose_map(self, altitude: float, dose_type: str = 'edose', **plot_kwargs):
-        """
-        Calculates and plots the integrated dose map for a given altitude and dose type,
-        using the native grid from the simulation results.
-
-        Args:
-            altitude: The altitude (in km) for analysis.
-            dose_type: The dose rate column to integrate and plot (e.g., 'edose', 'adose').
-            **plot_kwargs: Additional keyword arguments passed to the plot_dose_map function.
-                          (e.g., cmap, vmin, vmax).
-
-        Returns:
-            Matplotlib axes object containing the map, or None if plotting fails.
-        """
-        # Calculate the specific integrated dose type
-        output_col_name = f'integrated_{dose_type}_uSv'
-        integrated_dose_df = self.calculate_integrated_dose(
-            altitude=altitude, 
-            dose_type=dose_type # Pass dose_type here
-        )
-        
-        if integrated_dose_df is None or integrated_dose_df.empty:
-            print("Error: Could not calculate integrated dose for plotting.")
-            return None
-            
-        # Add the altitude column back in, as plot_dose_map expects it
-        integrated_dose_df['altitude (km)'] = altitude
-            
-        # Prepare plot arguments dynamically
-        legend_label = f'Integrated {dose_type.replace("_"," ")} (uSv)'
-        plot_args = {
-            'plot_title': f'Integrated {dose_type.replace("_"," ")} at {altitude:.1f} km ({self.spectra["datetime"].min().strftime("%Y-%m-%d %H:%M")} to {self.spectra["datetime"].max().strftime("%H:%M")}) ',
-            'dose_type': output_col_name, # Use the calculated column name
-            'legend_label': legend_label
-        }
-        plot_args.update(plot_kwargs) # Allow user to override defaults
-        
-        # Assuming plot_dose_map can take a value_column argument
-        # plot_dose_map creates its own figure/axes internally
-        map_ax, _ = plot_dose_map(integrated_dose_df, **plot_args) # Removed ax=ax
-        return map_ax
-
-    def plot_peak_dose_rate_map(self, altitude: float, dose_type: str = 'edose', **plot_kwargs):
-        """
-        Calculates and plots the peak dose rate map for a given altitude and dose type,
-        using the native grid from the simulation results.
-
-        Args:
-            altitude: The altitude (in km) for analysis.
-            dose_type: The dose rate column to analyze and plot (e.g., 'edose', 'adose').
-            **plot_kwargs: Additional keyword arguments passed to the plot_dose_map function.
-
-        Returns:
-            Matplotlib axes object containing the map, or None if plotting fails.
-        """
-        # Calculate the specific peak dose rate type
-        output_col_name = f'peak_{dose_type}_uSv_hr'
-        peak_dose_rate_df = self.get_peak_dose_rate_map(
-            altitude=altitude, 
-            dose_type=dose_type # Pass dose_type here
-        )
-        
-        if peak_dose_rate_df is None or peak_dose_rate_df.empty:
-            print("Error: Could not calculate peak dose rate map for plotting.")
-            return None
-            
-        # Add the altitude column back in, as plot_dose_map expects it
-        peak_dose_rate_df['altitude (km)'] = altitude
-            
-        # Prepare plot arguments dynamically
-        legend_label = f'Peak {dose_type.replace("_"," ")} (uSv/hr)'
-        plot_args = {
-            'plot_title': f'Peak {dose_type.replace("_"," ")} Rate at {altitude:.1f} km ({self.spectra["datetime"].min().strftime("%Y-%m-%d %H:%M")} to {self.spectra["datetime"].max().strftime("%H:%M")}) ',
-            'dose_type': output_col_name, # Use the calculated column name
-            'legend_label': legend_label
-        }
-        plot_args.update(plot_kwargs)
-        
-        try:
-            # Assuming plot_dose_map can take a value_column argument
-            # plot_dose_map creates its own figure/axes internally
-            map_ax, _ = plot_dose_map(peak_dose_rate_df, **plot_args) # Removed ax=ax
-            return map_ax
-        except Exception as e:
-            print(f"Error plotting peak dose rate map: {e}")
-            return None
-
-    def plot_integrated_dose_globe(self, altitude: float, dose_type: str = 'edose', **plot_kwargs):
-        """
-        Calculates and plots the integrated dose on a 3D globe for a given altitude and dose type,
-        using the native grid from the simulation results.
-
-        Args:
-            altitude: The altitude (in km) for analysis.
-            dose_type: The dose rate column to integrate and plot (e.g., 'edose', 'adose').
-            **plot_kwargs: Additional keyword arguments passed to plot_on_spherical_globe.
-
-        Returns:
-            Matplotlib Figure object containing the globe, or None if plotting fails.
-        """
-        # Calculate the specific integrated dose type
-        output_col_name = f'integrated_{dose_type}_uSv'
-        integrated_dose_df = self.calculate_integrated_dose(
-            altitude=altitude, 
-            dose_type=dose_type # Pass dose_type here
-        )
-        
-        if integrated_dose_df is None or integrated_dose_df.empty:
-            print("Error: Could not calculate integrated dose for plotting.")
-            return None
-
-        # Prepare plot arguments dynamically
-        legend_label = f'Integrated {dose_type.replace("_"," ")} (uSv)'
-        plot_args = {
-            'plot_title': f'Integrated {dose_type.replace("_"," ")} at {altitude:.1f} km',
-            'dose_type': output_col_name, # Use the calculated column name
-            'legend_label': legend_label
-        }
-        plot_args.update(plot_kwargs)
-
-        try:
-            globe_fig = plot_on_spherical_globe(integrated_dose_df, **plot_args)
-            return globe_fig
-        except Exception as e:
-            print(f"Error plotting integrated dose globe: {e}")
-            return None
-
-    def plot_peak_dose_rate_globe(self, altitude: float, dose_type: str = 'edose', **plot_kwargs):
-        """
-        Calculates and plots the peak dose rate on a 3D globe for a given altitude and dose type,
-        using the native grid from the simulation results.
-
-        Args:
-            altitude: The altitude (in km) for analysis.
-            dose_type: The dose rate column to analyze and plot (e.g., 'edose', 'adose').
-            **plot_kwargs: Additional keyword arguments passed to plot_on_spherical_globe.
-
-        Returns:
-            Matplotlib Figure object containing the globe, or None if plotting fails.
-        """
-        # Calculate the specific peak dose rate type
-        output_col_name = f'peak_{dose_type}_uSv_hr'
-        peak_dose_rate_df = self.get_peak_dose_rate_map(
-            altitude=altitude, 
-            dose_type=dose_type # Pass dose_type here
-        )
-        
-        if peak_dose_rate_df is None or peak_dose_rate_df.empty:
-            print("Error: Could not calculate peak dose rate map for plotting.")
-            return None
-
-        # Prepare plot arguments dynamically
-        legend_label = f'Peak {dose_type.replace("_"," ")} (uSv/hr)'
-        plot_args = {
-            'plot_title': f'Peak {dose_type.replace("_"," ")} Rate at {altitude:.1f} km',
-            'dose_type': output_col_name, # Use the calculated column name
-            'legend_label': legend_label
-        }
-        plot_args.update(plot_kwargs)
-
-        try:
-            globe_fig = plot_on_spherical_globe(peak_dose_rate_df, **plot_args)
-            return globe_fig
-        except Exception as e:
-            print(f"Error plotting peak dose rate globe: {e}")
-            return None
-
-    def plot_timeseries_at_location(self, latitude: float, longitude: float, altitude: float, dose_type: str = 'edose', ax=None, nearest_ts: bool = True, interpolation_method: str = 'linear', **plot_kwargs):
-        """
-        Plots the dose rate time series for a specific dose type at a specific 
-        geographic location and altitude.
-
-        Args:
-            latitude: Target latitude in degrees.
-            longitude: Target longitude in degrees.
-            altitude: Target altitude in km.
-            dose_type: The dose rate column to plot (e.g., 'edose', 'adose'). Defaults to 'edose'.
-            ax: Matplotlib axes object to plot on. If None, a new figure and axes are created.
-            nearest_ts: Passed to get_dose_rate_at_location for timestamp matching.
-            interpolation_method: Passed to get_dose_rate_at_location for interpolation.
-            **plot_kwargs: Additional keyword arguments passed to ax.plot().
-
-        Returns:
-            Matplotlib axes object containing the plot.
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("Warning: No dose rate data available. Run run_AniMAIRE first.")
-            return None
-
-        timestamps = sorted(self.dose_rates.keys())
-        dose_rates_at_loc = []
-        valid_timestamps = []
-
-        print(f"Extracting {dose_type} time series for Lat={latitude}, Lon={longitude}, Alt={altitude} km...")
-        for ts in timestamps:
-            dose_rate = self.get_dose_rate_at_location(
-                latitude, longitude, altitude, ts, 
-                dose_type=dose_type, # Pass dose_type here
-                nearest_ts=nearest_ts, 
-                interpolation_method=interpolation_method
-            )
-            if dose_rate is not None:
-                dose_rates_at_loc.append(dose_rate)
-                valid_timestamps.append(ts)
-            # else: # Optional: Add handling for missing data points in the series
-            #     dose_rates_at_loc.append(np.nan)
-            #     valid_timestamps.append(ts)
-
-        if not dose_rates_at_loc:
-            print("Error: Could not retrieve any valid dose rate data for the specified location.")
-            return None
-
-        if ax is None:
-            fig, ax = plt.subplots(figsize=(10, 6))
-        else:
-            fig = ax.figure
-
-        # Set default plot settings if not provided in kwargs
-        plot_settings = {
-            'label': f'{dose_type} @ Lat={latitude}, Lon={longitude}, Alt={altitude} km',
-            'marker': 'o',
-            'linestyle': '-'
-        }
-        plot_settings.update(plot_kwargs) # Override defaults with user kwargs
-
-        ax.plot(valid_timestamps, dose_rates_at_loc, **plot_settings)
-
-        ax.set_xlabel("Time (UTC)")
-        # Make Y label dynamic based on dose_type
-        y_label = f'{dose_type.replace("_"," ").capitalize()} Rate (uSv/hr)' 
-        ax.set_ylabel(y_label)
-        ax.set_title(f"{dose_type.replace('_',' ').capitalize()} Time Series")
-        ax.grid(True)
-        ax.legend()
-        fig.autofmt_xdate() # Improve date formatting on x-axis
-
-        return ax
-
-    def plot_map_at_time(self, timestamp: dt.datetime, altitude: float, ax=None, nearest_ts: bool = True, **plot_kwargs):
-        """
-        Plots a 2D dose rate map for a specific timestamp and altitude.
-
-        Args:
-            timestamp: The target timestamp for the map.
-            altitude: The altitude (in km) for the map.
-            ax: Matplotlib axes object to plot on. If None, a new figure and axes are created.
-            nearest_ts: If True, use the nearest available timestamp if the exact one is not found.
-            **plot_kwargs: Additional keyword arguments passed to the underlying DoseRateFrame.plot_dose_map().
-
-        Returns:
-            Matplotlib axes object containing the map, or None if plotting fails.
-        """
-        frame = self.get_dose_rate_frame(timestamp, nearest=nearest_ts)
-        if frame is None:
-            return None # Message already printed
-
-        try:
-            # Ensure the axis is handled correctly if provided
-            if ax is not None:
-                plot_kwargs['ax'] = ax 
-                
-            # Call the DoseRateFrame's plotting method
-            map_ax = frame.plot_dose_map(altitude=altitude, **plot_kwargs)
-            return map_ax
-        except Exception as e:
-            print(f"Error plotting map for timestamp {frame.timestamp}: {e}")
-            return None
-
-    def plot_globe_at_time(self, timestamp: dt.datetime, altitude: float, nearest_ts: bool = True, **plot_kwargs):
-        """
-        Plots the dose rate on a 3D globe for a specific timestamp and altitude.
-
-        Args:
-            timestamp: The target timestamp for the globe plot.
-            altitude: The altitude (in km) for the globe plot.
-            nearest_ts: If True, use the nearest available timestamp if the exact one is not found.
-            **plot_kwargs: Additional keyword arguments passed to the underlying DoseRateFrame.plot_on_globe().
-
-        Returns:
-            Matplotlib Figure object containing the globe, or None if plotting fails.
-        """
-        frame = self.get_dose_rate_frame(timestamp, nearest=nearest_ts)
-        if frame is None:
-            return None # Message already printed
-
-        try:
-            # Call the DoseRateFrame's plotting method
-            globe_fig = frame.plot_on_globe(altitude=altitude, **plot_kwargs)
-            return globe_fig
-        except Exception as e:
-            print(f"Error plotting globe for timestamp {frame.timestamp}: {e}")
-            return None
-
-    # --- Data Export Methods ---
-
-    def export_to_netcdf(self, filename: str):
-        """
-        Exports the calculated dose rate data for the entire event to a NetCDF file.
-
-        Assumes that the latitude, longitude, and altitude grids are consistent 
-        across all DoseRateFrame objects in self.dose_rates.
-
-        Args:
-            filename: The path (including filename) for the output NetCDF file.
-        """
-        if not hasattr(self, 'dose_rates') or not self.dose_rates:
-            print("Error: No dose rate data available to export. Run run_AniMAIRE first.")
-            return
-
-        print(f"Preparing data for NetCDF export to {filename}...")
-        
-        # Get sorted timestamps
-        timestamps = sorted(self.dose_rates.keys())
-        n_times = len(timestamps)
-        
-        # Get grid information from the first frame (assuming consistency)
-        first_frame = self.dose_rates[timestamps[0]]
-        try:
-            # Infer grid from unique coordinate values
-            altitudes = np.unique(first_frame['altitude (km)'].values)
-            latitudes = np.unique(first_frame['latitude'].values)
-            longitudes = np.unique(first_frame['longitude'].values)
-            n_alts = len(altitudes)
-            n_lats = len(latitudes)
-            n_lons = len(longitudes)
-            
-            # Check if the number of points matches the inferred grid size
-            if len(first_frame) != n_alts * n_lats * n_lons:
-                 print("Warning: Number of data points in the first frame does not match inferred grid size (n_alts * n_lats * n_lons).")
-                 print(f"Points: {len(first_frame)}, Grid Size: {n_alts}*{n_lats}*{n_lons} = {n_alts * n_lats * n_lons}")
-                 print("Data might be sparse or unstructured. Exporting raw structure.")
-                 # Fallback or alternative structured export might be needed here
-                 # For now, proceed assuming we can reshape or handle it.
-                 # A more robust approach might store data as 1D arrays if unstructured.
-                 pass # Continue cautiously
-
-        except KeyError as e:
-             print(f"Error: Missing expected coordinate column in DoseRateFrame: {e}. Cannot determine grid.")
-             return
-        except Exception as e:
-             print(f"Error inferring grid structure: {e}")
-             return
-
-        # Create a 4D NumPy array to hold all dose rate data
-        # Dimensions: (time, altitude, latitude, longitude)
-        all_dose_rates = np.full((n_times, n_alts, n_lats, n_lons), np.nan, dtype=np.float32)
-
-        # Populate the array
-        for i, ts in enumerate(tqdm(timestamps, desc="Structuring data")):
-            frame = self.dose_rates[ts]
-            # Pivot or reshape the DataFrame into the grid structure
-            # This assumes a MultiIndex or similar structure might be useful, or manual reshaping
-            try:
-                # Simple pivot assuming one value per coord combination
-                # This might fail if data is not perfectly structured or has duplicates
-                frame_pivot = frame.pivot_table(index=['altitude (km)', 'latitude'], columns='longitude', values='edose')
-                # Ensure consistent coordinate order if pivot_table changes it
-                frame_pivot = frame_pivot.reindex(index=pd.MultiIndex.from_product([altitudes, latitudes], names=['altitude (km)', 'latitude']), 
-                                                columns=longitudes)
-                all_dose_rates[i, :, :, :] = frame_pivot.values.reshape((n_alts, n_lats, n_lons))
-            except Exception as e:
-                print(f"Warning: Could not pivot/reshape data for timestamp {ts}. Error: {e}. Leaving as NaN.")
-                # Alternative: Iterate through rows and assign manually (slower)
-                # for _, row in frame.iterrows():
-                #     alt_idx = np.where(altitudes == row['altitude (km)'])[0][0]
-                #     lat_idx = np.where(latitudes == row['latitude'])[0][0]
-                #     lon_idx = np.where(longitudes == row['longitude'])[0][0]
-                #     all_dose_rates[i, alt_idx, lat_idx, lon_idx] = row['edose']
-
-        # Create and write the NetCDF file
-        try:
-            with netCDF4.Dataset(filename, 'w', format='NETCDF4') as ncfile:
-                print("Writing NetCDF file...")
-                # --- Create Dimensions ---
-                ncfile.createDimension('time', n_times)
-                ncfile.createDimension('altitude', n_alts)
-                ncfile.createDimension('latitude', n_lats)
-                ncfile.createDimension('longitude', n_lons)
-
-                # --- Create Coordinate Variables ---
-                time_var = ncfile.createVariable('time', 'f8', ('time',))
-                alt_var = ncfile.createVariable('altitude', 'f4', ('altitude',))
-                lat_var = ncfile.createVariable('latitude', 'f4', ('latitude',))
-                lon_var = ncfile.createVariable('longitude', 'f4', ('longitude',))
-                
-                # Coordinate Variable Attributes
-                time_var.units = 'seconds since 1970-01-01 00:00:00 UTC'
-                time_var.calendar = 'gregorian'
-                time_var.standard_name = 'time'
-                time_var.long_name = 'Time'
-                
-                alt_var.units = 'km'
-                alt_var.standard_name = 'altitude'
-                alt_var.long_name = 'Altitude above mean sea level'
-                alt_var.axis = 'Z'
-                
-                lat_var.units = 'degrees_north'
-                lat_var.standard_name = 'latitude'
-                lat_var.long_name = 'Latitude'
-                lat_var.axis = 'Y'
-                
-                lon_var.units = 'degrees_east'
-                lon_var.standard_name = 'longitude'
-                lon_var.long_name = 'Longitude'
-                lon_var.axis = 'X'
-                
-                # Write Coordinate Data
-                time_var[:] = [ts.timestamp() for ts in timestamps]
-                alt_var[:] = altitudes
-                lat_var[:] = latitudes
-                lon_var[:] = longitudes
-                
-                # --- Create Data Variable ---
-                edose_var = ncfile.createVariable('effective_dose_rate', 'f4', ('time', 'altitude', 'latitude', 'longitude'), zlib=True, complevel=4, fill_value=np.nan)
-                
-                # Data Variable Attributes
-                edose_var.units = 'uSv/hr'
-                edose_var.long_name = 'Effective Dose Rate'
-                edose_var.coordinates = 'time altitude latitude longitude'
-                # Add provenance/source info if available
-                if hasattr(self, 'spectra_file_path'):
-                    edose_var.source_spectra_file = self.spectra_file_path
-                    
-                # Write Data
-                edose_var[:,:,:,:] = all_dose_rates
-
-                # --- Global Attributes ---
-                ncfile.title = 'AniMAIRE Event Simulation Results'
-                ncfile.institution = 'Generated by AniMAIRE' # Or more specific affiliation
-                ncfile.source = 'AniMAIRE atmospheric radiation model'
-                ncfile.history = f'Created {dt.datetime.utcnow().isoformat()}Z'
-                ncfile.Conventions = 'CF-1.6' # Or later version if applicable
-                if hasattr(self, 'spectra_file_path'):
-                    ncfile.spectra_file = self.spectra_file_path
-                ncfile.event_start_time_utc = timestamps[0].isoformat()
-                ncfile.event_end_time_utc = timestamps[-1].isoformat()
-
-            print(f"Successfully exported data to {filename}")
-
-        except Exception as e:
-            print(f"Error writing NetCDF file: {e}")
-
-# Define a cached version of the run_from_double_power_law_gaussian_distribution function
 @memory.cache
-def run_animaire_cached(J0, gamma, deltaGamma, sigma_1, sigma_2, B, alpha_prime, 
-                         reference_pitch_angle_latitude, reference_pitch_angle_longitude, 
-                         date_and_time, use_split_spectrum, **kwargs):
-    """Cached version of run_from_double_power_law_gaussian_distribution using Streamlit"""
+def run_animaire_cached(
+    J0: float,
+    gamma: float,
+    deltaGamma: float,
+    sigma_1: float,
+    sigma_2: float,
+    B: float,
+    alpha_prime: float,
+    reference_pitch_angle_latitude: float,
+    reference_pitch_angle_longitude: float,
+    date_and_time: Union[dt.datetime, np.datetime64],
+    use_split_spectrum: bool,
+    **kwargs: Any
+) -> DoseRateFrame:
+    """
+    Cached version of run_from_double_power_law_gaussian_distribution function.
+    
+    This function provides a caching wrapper around the main AniMAIRE calculation
+    function to avoid recomputing results for identical parameter sets.
+    
+    Args:
+        J0 (float): Normalization constant (particles/cm²/s/sr/GV)
+        gamma (float): Spectral index for the low rigidity part of the spectrum
+        deltaGamma (float): Change in spectral index for the high rigidity part
+        sigma_1 (float): First Gaussian width parameter (radians)
+        sigma_2 (float): Second Gaussian width parameter (radians) 
+        B (float): Scaling factor for the second Gaussian component
+        alpha_prime (float): Maximum pitch angle (radians)
+        reference_pitch_angle_latitude (float): Reference latitude for pitch angle (degrees)
+        reference_pitch_angle_longitude (float): Reference longitude for pitch angle (degrees)
+        date_and_time (Union[dt.datetime, np.datetime64]): Date and time for the calculation
+        use_split_spectrum (bool): Whether to use a split spectrum (True) or single power law (False)
+        **kwargs: Additional keyword arguments passed to the underlying function
+        
+    Returns:
+        DoseRateFrame: Object containing the calculated dose rates and metadata
+    """
     return run_from_double_power_law_gaussian_distribution(
         J0=J0,
         gamma=gamma,
@@ -1411,11 +1262,24 @@ def run_animaire_cached(J0, gamma, deltaGamma, sigma_1, sigma_2, B, alpha_prime,
 
 def run_from_GLE_spectrum_file(
         GLE_spectrum_file: str,
-        **kwargs
-) -> AniMAIRE_event:
+        **kwargs: Any
+) -> DoublePowerLawGaussianEvent:
     """
-    Perform a run to calculate dose rates using a GLE spectrum file.
+    Create and run an AniMAIRE simulation using a GLE spectrum file.
+    
+    This is a convenience function that creates a DoublePowerLawGaussianEvent instance
+    from a spectrum file and runs the simulation in one step.
+    
+    Args:
+        GLE_spectrum_file (str): Path to the CSV file containing spectral data
+        **kwargs: Additional keyword arguments passed to the run_AniMAIRE method
+        
+    Returns:
+        DoublePowerLawGaussianEvent: Event object with calculated dose rates
     """
-    GLE_to_run = AniMAIRE_event(GLE_spectrum_file)
-    GLE_to_run.run_AniMAIRE(**kwargs)
-    return GLE_to_run
+    event = DoublePowerLawGaussianEvent(GLE_spectrum_file)
+    event.run_AniMAIRE(**kwargs)
+    return event
+
+
+

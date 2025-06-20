@@ -20,9 +20,9 @@ def get_correctly_formatted_particle_dist_list(proton_rigidity_spectrum,
             # if (reference_pitch_angle_latitude is None) or (reference_pitch_angle_longitude is None):
             #     raise Exception("Error: a non-isotropic pitch angle distribution was used but reference longitudes and latitudes were not set!")
 
-            particle_pitch_angle_distribution = pitchAngleDistribution(particle_pitch_angle_distribution,
-                                                                reference_pitch_angle_latitude,
-                                                                reference_pitch_angle_longitude)
+            # particle_pitch_angle_distribution = pitchAngleDistribution(particle_pitch_angle_distribution,
+            #                                                     reference_pitch_angle_latitude,
+            #                                                     reference_pitch_angle_longitude)
                 
             particle_distribution = particleDistribution(
                                                 particle_name,
