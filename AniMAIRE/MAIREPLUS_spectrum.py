@@ -2,7 +2,7 @@ import numpy as np
 import datetime as dt
 from typing import Callable, Tuple
 
-from maire_plus_tools.tools.calculate_MAIREPLUS_spectral_index import calculate_MAIREPLUS_spectral_index
+from .maire_plus_tools.calculate_MAIREPLUS_spectral_index import calculate_MAIREPLUS_spectral_index
 
 from .anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import PowerLawSpectrum
 # Import directly to avoid circular imports
