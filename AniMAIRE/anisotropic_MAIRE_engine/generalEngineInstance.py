@@ -6,7 +6,8 @@ from joblib import Memory
 import datetime as dt
 from typing import Optional
 
-from rigidity_predictor import RigidityPredictor
+#from rigidity_predictor import RigidityPredictor
+from .rigidityPredictor.rigidity_predictor import RigidityPredictor
 
 from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools

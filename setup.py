@@ -25,9 +25,10 @@ setup(
     name='AniMAIRE',
     packages=find_packages(exclude='pytests'),
     package_data={"AniMAIRE":[
-                                "anisotropic_MAIRE_engine/data/*.csv"
+                                "anisotropic_MAIRE_engine/data/*.csv",
+                                "anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl"
                                          ]},
-    version='1.3.3',
+    version='1.4.1',
     description='Python library for running the anisotropic version of MAIRE+',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -63,7 +64,9 @@ setup(
                         'imageio >= 2.37.0',
                         'psutil >= 7.0.0',
                         'OTSO >= 1.0.16',
-                        'geopy >= 2.0.0',],
+                        'geopy >= 2.0.0',
+                        'pynverse >= 0.1.4.6',
+                        'xgboost >= 1.6.0'],
     #install_requires,
     setup_requires=['pytest-runner','wheel'],
     tests_require=['pytest'],

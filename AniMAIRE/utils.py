@@ -36,7 +36,9 @@ def get_kp_index(date_and_time: dt.datetime) -> int:
     kp_data = sw.ap_kp_3h()
     kp_data.index = kp_data.index.tz_localize('UTC')  # Localize the index to UTC
 
-    return round(kp_data[pd.to_datetime(kp_data.index) < date_and_time].iloc[-1]["Kp"])
+    date_and_time_translated = date_and_time + dt.timedelta(hours=1,minutes=30) # need to translate by an hour and a half, because the sw package uses the midpoint of the 3h interval rather than the start of the interval
+
+    return round(kp_data[pd.to_datetime(kp_data.index) < date_and_time_translated].iloc[-1]["Kp"])
 
 default_altitudes_in_kft = [0,10,20] + [i for i in range(25, 61 + 1, 3)]
 

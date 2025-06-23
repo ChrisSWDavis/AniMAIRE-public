@@ -125,7 +125,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         current_rigidity -= rigidity_step
 
     # Convert rigidity (GV) to energy (GeV) for OTSO
-    energy_levels_MeV = PRCT.convertParticleRigidityToEnergy(rigidity_levels_GV)/1000.0
+    energy_levels_GeV = PRCT.convertParticleRigidityToEnergy(rigidity_levels_GV)/1000.0
     
     all_results = []
     
@@ -134,11 +134,15 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         zenith, azimuth = zenith_azimuth
         
         # Calculate asymptotic directions using OTSO.planet
+        # Set default externalmag if not provided in kwargs
+        if 'externalmag' not in kwargs:
+            kwargs['externalmag'] = "TSY89_BOBERG"
+            
         planet_result = OTSO.planet(
             array_of_lats_and_longs=array_of_lats_and_longs,
             corenum=corenum,
             asymptotic="YES",
-            asymlevels=energy_levels_MeV,
+            asymlevels=energy_levels_GeV,
             kp=kpIndex,
             year=dateAndTime.year,
             month=dateAndTime.month,

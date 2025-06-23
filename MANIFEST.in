@@ -1,1 +1,2 @@
 include AniMAIRE/anisotropic_MAIRE_engine/data/*.csv
+include AniMAIRE/anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl
