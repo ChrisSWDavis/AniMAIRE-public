@@ -9,8 +9,8 @@ import pytest
 from AniMAIRE.anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 
 
-#IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
-IN_GITHUB_ACTIONS = False
+IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
+#IN_GITHUB_ACTIONS = False
 
 """
 Unit tests for the anisotropic MAIRE module.
