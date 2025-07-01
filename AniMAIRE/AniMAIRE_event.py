@@ -26,6 +26,8 @@ from IPython.display import HTML
 
 import netCDF4  # For exporting data to NetCDF format
 
+import copy
+
 # Set up caching to avoid recomputing expensive operations
 memory = Memory(location='./.AniMAIRE_event_cache')
 
@@ -179,6 +181,107 @@ class BaseAniMAIREEvent:
         </div>
         """
         return html
+    
+    def __add__(self, other: Union['BaseAniMAIREEvent', 'DoseRateFrame']) -> 'BaseAniMAIREEvent':
+        """
+        Add two AniMAIREEvent objects together, or add a DoseRateFrame to all timestamps.
+        
+        This method supports two types of addition operations:
+        1. Event + Event: Combines dose rates from both events at matching timestamps
+        2. Event + DoseRateFrame: Adds the dose rate frame to all timestamps in the event
+        
+        Args:
+            other (Union[BaseAniMAIREEvent, DoseRateFrame]): The object to add to this event.
+                - If BaseAniMAIREEvent: Must have matching timestamps for element-wise addition
+                - If DoseRateFrame: Will be added to every timestamp in this event
+                
+        Returns:
+            BaseAniMAIREEvent: A new event instance with combined dose rates. The returned
+                             event is a deep copy of self with updated dose_rates.
+                             
+        Raises:
+            TypeError: If other is not a BaseAniMAIREEvent or DoseRateFrame
+            ValueError: If adding two events with non-matching timestamps
+            
+        Examples:
+            >>> # Adding two events with matching timestamps
+            >>> combined_event = event1 + event2
+            
+            >>> # Adding a background dose frame to all timestamps
+            >>> event_with_background = event + background_dose_frame
+        """
+        if isinstance(other, BaseAniMAIREEvent):
+            # Combine dose rates from both events
+            combined_dose_rates = {}
+            
+            # Check if timestamps match between events
+            self_timestamps = set(self.dose_rates.keys())
+            other_timestamps = set(other.dose_rates.keys())
+            
+            if self_timestamps != other_timestamps:
+                raise ValueError(f"Timestamps must match between events. Self timestamps: {sorted(self_timestamps)}, Other timestamps: {sorted(other_timestamps)}")
+            
+            # Add dose rate frames together for identical timestamps
+            for timestamp in self.dose_rates.keys():
+                combined_dose_rates[timestamp] = self.dose_rates[timestamp] + other.dose_rates[timestamp]
+                
+            # Create a new event instance with combined data using deep copy
+            combined_event = copy.deepcopy(self)
+            combined_event.dose_rates = combined_dose_rates
+            combined_event.dose_rate_components = {}
+            
+            return combined_event
+        
+        elif isinstance(other, DoseRateFrame):
+            # Add a DoseRateFrame to all timestamps in this event
+            combined_dose_rates = {}
+            
+            # Add the DoseRateFrame to each timestamp
+            for timestamp in self.dose_rates.keys():
+                combined_dose_rates[timestamp] = self.dose_rates[timestamp] + other
+                
+            # Create a new event instance with combined data using deep copy
+            combined_event = copy.deepcopy(self)
+            combined_event.dose_rates = combined_dose_rates
+            combined_event.dose_rate_components = {}
+            
+            return combined_event
+        
+        else:
+            raise TypeError("Can only add BaseAniMAIREEvent objects or DoseRateFrame objects together")
+
+    def __radd__(self, other: 'DoseRateFrame') -> 'BaseAniMAIREEvent':
+        """
+        Support reverse addition (e.g., DoseRateFrame + BaseAniMAIREEvent).
+        
+        This method is called when the left operand doesn't support addition
+        with the right operand, allowing expressions like dose_frame + event.
+        It provides symmetric addition operations so that both event + dose_frame
+        and dose_frame + event work identically.
+        
+        Args:
+            other (DoseRateFrame): The dose rate frame to add to this event.
+                                 Will be added to all timestamps in the event.
+                                 
+        Returns:
+            Union[BaseAniMAIREEvent, type(NotImplemented)]: 
+                - BaseAniMAIREEvent: A new event with the dose frame added to all timestamps
+                - NotImplemented: If other is not a supported type (lets Python handle the error)
+                
+        Examples:
+            >>> # These two expressions are equivalent:
+            >>> result1 = event + dose_frame      # calls event.__add__(dose_frame)
+            >>> result2 = dose_frame + event      # calls event.__radd__(dose_frame)
+            
+        Note:
+            This method delegates to __add__ for consistent behavior regardless of operand order.
+        """
+        if isinstance(other, DoseRateFrame):
+            # For DoseRateFrame + BaseAniMAIREEvent, delegate to __add__
+            return self.__add__(other)
+        else:
+            # For other types, return NotImplemented to let Python handle it
+            return NotImplemented
 
     def run_AniMAIRE(self, *args: Any, **kwargs: Any) -> Dict[dt.datetime, DoseRateFrame]:
         """
@@ -560,6 +663,19 @@ class BaseAniMAIREEvent:
                 dist = ((point['latitude'] - latitude)**2 + (point['longitude'] - longitude)**2)**0.5
                 # Return the value if it's close enough, otherwise None
                 return float(point[dose_type]) if dist < 10.0 else None
+            
+        # Handle longitude wrapping for interpolation
+        # Copy longitude = 0.0 rows to longitude = 360.0 for better interpolation
+        zero_lon_data = data[data['longitude'] == 0.0].copy()
+        if not zero_lon_data.empty:
+            zero_lon_data['longitude'] = 360.0
+            data = pd.concat([data, zero_lon_data], ignore_index=True)
+        
+        # Also copy longitude = 360.0 rows to longitude = 0.0 for completeness
+        max_lon_data = data[data['longitude'] == 360.0].copy()
+        if not max_lon_data.empty:
+            max_lon_data['longitude'] = 0.0
+            data = pd.concat([data, max_lon_data], ignore_index=True)
         
         # Normal interpolation for multiple points
         pts = data[['latitude','longitude']].values; vals=data[dose_type].values
@@ -1102,6 +1218,10 @@ class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
             'SymLong': 'reference_pitch_angle_longitude'
         }
         
+        # Add KpIndex mapping if present in the input data
+        if 'KpIndex' in self.raw_spectra_data.columns:
+            column_mapping['KpIndex'] = 'KpIndex'
+        
         # Rename the columns according to the mapping
         self.spectra = self.raw_spectra_data.rename(columns=column_mapping)
         
@@ -1159,6 +1279,11 @@ class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
             print(f"Processing spectrum for datetime: {spectrum['datetime']}")
             
             # Determine whether to use caching or not
+            # Check if KpIndex column exists and set Kp_index parameter
+            kp_kwargs = {}
+            if 'KpIndex' in spectrum:
+                kp_kwargs['Kp_index'] = spectrum['KpIndex']
+            
             if use_cache:
                 # Use cached function to avoid recomputing identical parameter sets
                 output_dose_rate = run_animaire_cached(
@@ -1173,6 +1298,7 @@ class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
                     reference_pitch_angle_longitude=spectrum['reference_pitch_angle_longitude'],
                     date_and_time=spectrum['datetime'],
                     use_split_spectrum=True,
+                    **kp_kwargs,
                     **kwargs
                 )
             else:
@@ -1189,6 +1315,7 @@ class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
                     reference_pitch_angle_longitude=spectrum['reference_pitch_angle_longitude'],
                     date_and_time=spectrum['datetime'],
                     use_split_spectrum=True,
+                    **kp_kwargs,
                     **kwargs
                 )
             
