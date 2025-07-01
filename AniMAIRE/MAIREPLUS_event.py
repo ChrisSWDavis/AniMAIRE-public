@@ -201,7 +201,7 @@ class NeutronMonitorData(pd.DataFrame):
             minute = int(start_time[2:4])
             second = int(start_time[4:6])
             
-            return dt.datetime(year, month, day, hour, minute, second)
+            return dt.datetime(year, month, day, hour, minute, second, tzinfo=dt.timezone.utc)
         except (ValueError, IndexError):
             return np.nan
 

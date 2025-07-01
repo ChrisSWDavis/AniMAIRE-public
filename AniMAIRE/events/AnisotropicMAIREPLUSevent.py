@@ -20,6 +20,80 @@ import numpy as np
 # Type aliases for clarity
 # MonitorSet = TypeVar('MonitorSet')  # Replace with actual type if available
 
+
+class ZeroDoseMAIREPLUSEvent(MAIREPLUS_event):
+    """
+    A dummy MAIREPLUS_event that returns zero dose rates for all calculations.
+    Used when normalization monitor activity is below the minimum threshold.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        """Initialize with the same parameters as MAIREPLUS_event but skip actual initialization."""
+        # Store the parameters without calling parent __init__ to avoid computation
+        self.params = kwargs
+        self.datetime = kwargs.get('datetime', [])
+        self.dose_rates = {}
+        self._is_zero_dose = True
+        
+        # Set required attributes from the parameters
+        self.neutron_monitor_1_location = kwargs.get('neutron_monitor_1_location')
+        self.neutron_monitor_2_location = kwargs.get('neutron_monitor_2_location')
+        self.normalisation_monitor_location = kwargs.get('normalisation_monitor_location')
+        
+    def run_AniMAIRE(self, use_cache: bool = True):
+        """Override to create zero-filled dose rate frames without computation."""
+        # Create zero dose rate frames for each timestamp
+        timestamps = self.datetime if hasattr(self.datetime, '__iter__') else [self.datetime]
+        
+        for ts in timestamps:
+            # Create a minimal dose rate frame with zeros
+            # We need to match the structure expected by the interpolation code
+            dose_df = pd.DataFrame({
+                'latitude': np.arange(-90, 91, 5),  # Basic grid
+                'longitude': np.arange(-180, 181, 10),
+                'altitude': 12.192,  # Default altitude
+                'edose': 0.0,
+                'adose': 0.0,
+                'dosee': 0.0,
+                'tn1': 0.0,
+                'SEU': 0.0,
+                'SEL': 0.0
+            })
+            
+            # Expand to create full grid
+            lats = dose_df['latitude'].unique()
+            lons = dose_df['longitude'].unique()
+            full_grid = pd.DataFrame(
+                [(lat, lon) for lat in lats for lon in lons],
+                columns=['latitude', 'longitude']
+            )
+            full_grid['altitude'] = 12.192
+            full_grid['edose'] = 0.0
+            full_grid['adose'] = 0.0
+            full_grid['dosee'] = 0.0
+            full_grid['tn1'] = 0.0
+            full_grid['SEU'] = 0.0
+            full_grid['SEL'] = 0.0
+            
+            # Create DoseRateFrame
+            dose_frame = DoseRateFrame(full_grid)
+            dose_frame.particle_distributions = []  # Empty particle distributions
+            
+            # Convert numpy datetime64 to Python datetime if needed
+            if isinstance(ts, np.datetime64):
+                ts = pd.Timestamp(ts).to_pydatetime()
+            
+            self.dose_rates[ts] = dose_frame
+    
+    def get_all_timestamps(self):
+        """Return all timestamps for this event."""
+        return list(self.dose_rates.keys())
+    
+    def __repr__(self):
+        """String representation indicating this is a zero-dose event."""
+        return f"ZeroDoseMAIREPLUSEvent(timestamps={len(self.dose_rates)})"
+
+
 @dataclass
 class EventBoundaries:
     """Data class to store event boundary information."""
@@ -47,6 +121,7 @@ class AnisotropicMAIREPLUSevent(BaseAniMAIREEvent):
         max_sets_to_process: int = None,
         timestamps_per_set: int = None,
         reference_station: str = 'OULU',
+        min_normalisation_percentage_increase: float = 3.0,
         **kwargs
     ):
         """
@@ -64,6 +139,9 @@ class AnisotropicMAIREPLUSevent(BaseAniMAIREEvent):
             Number of timestamps to use from each set.
         reference_station : str, optional
             Name of the reference neutron monitor station.
+        min_normalisation_percentage_increase : float, optional
+            Minimum percentage increase required for normalization monitor to be used.
+            If below this threshold, dose rates will be set to 0.0. Default is 3.0%.
         **kwargs : dict
             Additional keyword arguments for analysis customization.
         """
@@ -73,6 +151,7 @@ class AnisotropicMAIREPLUSevent(BaseAniMAIREEvent):
         self.max_sets_to_process = max_sets_to_process
         self.timestamps_per_set = timestamps_per_set
         self.reference_station = reference_station
+        self.min_normalisation_percentage_increase = min_normalisation_percentage_increase
         self.run_kwargs = kwargs
         self._monitor_sets: Optional[List[full_NM_set]] = None
 
@@ -282,17 +361,41 @@ class AnisotropicMAIREPLUSevent(BaseAniMAIREEvent):
             if filtered_set.get_primary().empty or filtered_set.get_secondary().empty:
                 continue
 
-            MAIREPLUS_events = MAIREPLUS_event(
-                neutron_monitor_1_percentage_increase=filtered_set.get_primary().head(timestamps_per_set)['percentage_increase'].values,
-                neutron_monitor_2_percentage_increase=filtered_set.get_secondary().head(timestamps_per_set)['percentage_increase'].values,
-                normalisation_monitor_percentage_increase=filtered_set.get_normalisation().head(timestamps_per_set)['percentage_increase'].values,
-                OULU_gcr_count_rate_in_seconds=event_boundaries.baseline_rate,
-                datetime=filtered_set.get_primary().head(timestamps_per_set)['timestamp'].values,
-                neutron_monitor_1_location=filtered_set.get_primary().get_location(),
-                neutron_monitor_2_location=filtered_set.get_secondary().get_location(),
-                normalisation_monitor_location=filtered_set.get_normalisation().get_location(),
-                **self.run_kwargs
-            )
+            # Check if normalization monitor percentage increase meets minimum threshold
+            normalisation_data = filtered_set.get_normalisation().head(timestamps_per_set)
+            max_normalisation_percentage = normalisation_data['percentage_increase'].max()
+            
+            if max_normalisation_percentage < self.min_normalisation_percentage_increase:
+                print(f"Using zero dose for monitor set with {nm_set.get_normalisation().get_station_name()} as normalization: "
+                      f"max percentage increase ({max_normalisation_percentage:.2f}%) below threshold "
+                      f"({self.min_normalisation_percentage_increase:.2f}%)")
+                
+                # Create a zero-dose event instead of skipping
+                MAIREPLUS_events = ZeroDoseMAIREPLUSEvent(
+                    neutron_monitor_1_percentage_increase=filtered_set.get_primary().head(timestamps_per_set)['percentage_increase'].values,
+                    neutron_monitor_2_percentage_increase=filtered_set.get_secondary().head(timestamps_per_set)['percentage_increase'].values,
+                    normalisation_monitor_percentage_increase=normalisation_data['percentage_increase'].values,
+                    OULU_gcr_count_rate_in_seconds=event_boundaries.baseline_rate,
+                    datetime=filtered_set.get_primary().head(timestamps_per_set)['timestamp'].values,
+                    neutron_monitor_1_location=filtered_set.get_primary().get_location(),
+                    neutron_monitor_2_location=filtered_set.get_secondary().get_location(),
+                    normalisation_monitor_location=filtered_set.get_normalisation().get_location(),
+                    **self.run_kwargs
+                )
+            else:
+                # Normal processing for monitors above threshold
+                MAIREPLUS_events = MAIREPLUS_event(
+                    neutron_monitor_1_percentage_increase=filtered_set.get_primary().head(timestamps_per_set)['percentage_increase'].values,
+                    neutron_monitor_2_percentage_increase=filtered_set.get_secondary().head(timestamps_per_set)['percentage_increase'].values,
+                    normalisation_monitor_percentage_increase=normalisation_data['percentage_increase'].values,
+                    OULU_gcr_count_rate_in_seconds=event_boundaries.baseline_rate,
+                    datetime=filtered_set.get_primary().head(timestamps_per_set)['timestamp'].values,
+                    neutron_monitor_1_location=filtered_set.get_primary().get_location(),
+                    neutron_monitor_2_location=filtered_set.get_secondary().get_location(),
+                    normalisation_monitor_location=filtered_set.get_normalisation().get_location(),
+                    **self.run_kwargs
+                )
+            
             MAIREPLUS_events.run_AniMAIRE(use_cache=use_cache)
             isotropic_dose_runs[nm_set] = MAIREPLUS_events
 
