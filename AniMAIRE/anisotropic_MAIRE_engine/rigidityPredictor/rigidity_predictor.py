@@ -222,18 +222,22 @@ class RigidityPredictor:
         if not filepath.endswith('.pkl'):
             filepath += '.pkl'
             
-        save_dict = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'feature_names': self.feature_names
-        }
-        
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         
-        # Save the model and associated data
+        # Save XGBoost model using native format
+        model_path = filepath.replace('.pkl', '_model.json')
+        self.model.save_model(model_path)
+        
+        # Save other components using joblib
+        save_dict = {
+            'scaler': self.scaler,
+            'feature_names': self.feature_names,
+            'model_path': model_path
+        }
+        
         joblib.dump(save_dict, filepath)
-        print(f"Model saved to {filepath}")
+        print(f"Model saved to {filepath} and {model_path}")
     
     @classmethod
     def load(cls, filepath: Optional[str] = None) -> 'RigidityPredictor':
@@ -266,9 +270,19 @@ class RigidityPredictor:
         # Load the saved dictionary
         save_dict = joblib.load(filepath)
         
+        # Load XGBoost model using native format if available
+        if 'model_path' in save_dict:
+            # New format with separate model file
+            import xgboost as xgb
+            model = xgb.Booster()
+            model.load_model(save_dict['model_path'])
+        else:
+            # Fallback to old format (pickle) for backwards compatibility
+            model = save_dict['model']
+        
         # Create a new instance
         predictor = cls(
-            model=save_dict['model'],
+            model=model,
             scaler=save_dict['scaler'],
             feature_names=save_dict['feature_names']
         )

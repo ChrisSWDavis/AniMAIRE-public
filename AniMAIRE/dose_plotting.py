@@ -111,7 +111,9 @@ def create_single_dose_map_plot_plt(heatmap_DF_to_Plot,
                                     legend_label=r"Effective dose ($\mu Sv / hr$)",
                                     palette="Spectral_r",
                                     plot_longitude_east=False,
-                                    plot_colorbar=True):
+                                    plot_colorbar=True,
+                                    save_plot=False,
+                                    filename=None):
 
     if not (heatmap_DF_to_Plot["altitude (km)"].nunique() == 1):
         print()
@@ -225,6 +227,15 @@ def create_single_dose_map_plot_plt(heatmap_DF_to_Plot,
 
     #plt.legend(title=dose_type,loc="center left",bbox_to_anchor=(1.1,0.5))
 
+    if save_plot:
+        if filename is None:
+            filename = "dose_map_plot.png"
+        elif not any(filename.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.pdf', '.svg']):
+            filename += '.png'
+        
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved as {filename}")
+
     return scatterPlotAxis, colorbar
 
 def plot_on_spherical_globe(heatmap_DF_to_Plot, 
@@ -234,7 +245,9 @@ def plot_on_spherical_globe(heatmap_DF_to_Plot,
                            hue_range=None,
                            legend_label=r"Effective dose ($\mu Sv / hr$)",
                            central_latitude=40.0,
-                           central_longitude=0.0):
+                           central_longitude=0.0,
+                           save_plot=False,
+                           filename=None):
     """
     Plot data on a 3D spherical globe using Cartopy.
     
@@ -256,6 +269,10 @@ def plot_on_spherical_globe(heatmap_DF_to_Plot,
         Latitude for the center of the orthographic projection
     central_longitude : float, default=0
         Longitude for the center of the orthographic projection
+    save_plot : bool, default=False
+        Whether to save the plot to a file
+    filename : str, optional
+        Custom filename for saving the plot. If None, uses default naming pattern.
     
     Returns:
     --------
@@ -307,12 +324,23 @@ def plot_on_spherical_globe(heatmap_DF_to_Plot,
     if plot_title:
         plt.title(plot_title)
     
+    if save_plot:
+        if filename is None:
+            filename = "spherical_globe_plot.png"
+        elif not any(filename.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.pdf', '.svg']):
+            filename += '.png'
+        
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved as {filename}")
+    
     return plt.gcf()
 
 def plot_dose_map(map_to_plot,
                   plot_title=None,
                   plot_contours=True,
                   levels=3,
+                  save_plot=False,
+                  filename=None,
                     **kwargs):
 
     #altitude_to_plot_in_km = altitude_to_plot_in_kft * 0.3048
@@ -324,6 +352,15 @@ def plot_dose_map(map_to_plot,
 
     if plot_contours is True:
         plot_dose_map_contours(map_to_plot,levels=levels,**kwargs)
+
+    if save_plot:
+        if filename is None:
+            filename = "dose_map_plot.png"
+        elif not any(filename.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.pdf', '.svg']):
+            filename += '.png'
+        
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        print(f"Plot saved as {filename}")
 
     return axis_no_colorbar, colorbar
 
@@ -370,7 +407,8 @@ def create_single_dose_map_plotly(DF_to_use,
 
     return doseRateMap
 
-def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
+def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=False, 
+                            filename=None, **kwargs):
     """
     Create animations for GLE event data.
     
@@ -382,11 +420,28 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
         The altitude in km for which to create the animation. Default is 12.192 km.
     save_gif : bool, optional
         Whether to save the animation as a GIF file. Default is False.
+        If filename is provided, this will be automatically set based on the file extension.
     save_mp4 : bool, optional
         Whether to save the animation as an MP4 file. Default is False.
+        If filename is provided, this will be automatically set based on the file extension.
+    filename : str, optional
+        Base filename for saving animation files. Extensions will be added automatically.
+        If provided, automatically enables saving in the appropriate format(s).
+        If no extension is specified, both GIF and MP4 will be saved.
     **kwargs : dict
         Additional keyword arguments to pass to the plotting functions
     """
+    
+    # Auto-enable saving based on filename
+    if filename is not None:
+        if filename.endswith('.gif'):
+            save_gif = True
+        elif filename.endswith('.mp4'):
+            save_mp4 = True
+        else:
+            # No extension specified, save both formats
+            save_gif = True
+            save_mp4 = True
     
     # Find the maximum dose value across all timestamps
     max_dose = 0
@@ -417,9 +472,8 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
         # Extract data for the specified altitude
         data_df = df.query(f'`altitude (km)` == {altitude}')
         
-        from AniMAIRE.dose_plotting import plot_dose_map
         outputted_figure = plot_dose_map(data_df,
-                            plot_title=f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
+                            plot_title=f'Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
                             #colorbar_label=f"Effective Dose Rate (μSv/hr)",
                             #central_latitude=50.0,
                             hue_range=(0, max_dose),
@@ -435,8 +489,11 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
     video = ani.to_jshtml()
     
     if save_gif:
-        # Save the animation to an animated GIF file
-        gif_filename = f"GLE_animation_{altitude}km.gif"
+        # Set filename for GIF
+        if filename is None:
+            gif_filename = f"GLE_animation_{altitude}km.gif"
+        else:
+            gif_filename = filename if filename.endswith('.gif') else f"{filename}.gif"
         
         # Create a temporary directory if it doesn't exist
         if not os.path.exists('animation_temp'):
@@ -466,8 +523,11 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
             os.remove(frame_filename)
 
     if save_mp4:
-        # Save the animation as an MP4 video
-        mp4_filename = f"GLE_animation_{altitude}km.mp4"
+        # Set filename for MP4
+        if filename is None:
+            mp4_filename = f"GLE_animation_{altitude}km.mp4"
+        else:
+            mp4_filename = filename if filename.endswith('.mp4') else f"{filename}.mp4"
         
         # Set up the writer with desired parameters
         Writer = animation.writers['ffmpeg']
@@ -485,7 +545,8 @@ def create_gle_map_animation(results, altitude=12.192, save_gif=False, save_mp4=
     print(f"GLE Animation at {altitude} km (max dose: {max_dose} μSv/hr):")
     return HTML(video)  # Return HTML object instead of displaying it directly
 
-def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp4=False, **kwargs):
+def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp4=False, 
+                              filename=None, **kwargs):
     """
     Create animations for GLE event data.
     
@@ -497,11 +558,28 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
         The altitude in km for which to create the animation. Default is 12.192 km.
     save_gif : bool, optional
         Whether to save the animation as a GIF file. Default is False.
+        If filename is provided, this will be automatically set based on the file extension.
     save_mp4 : bool, optional
         Whether to save the animation as an MP4 file. Default is False.
+        If filename is provided, this will be automatically set based on the file extension.
+    filename : str, optional
+        Base filename for saving animation files. Extensions will be added automatically.
+        If provided, automatically enables saving in the appropriate format(s).
+        If no extension is specified, both GIF and MP4 will be saved.
     **kwargs : dict
         Additional keyword arguments to pass to the plotting functions
     """
+    
+    # Auto-enable saving based on filename
+    if filename is not None:
+        if filename.endswith('.gif'):
+            save_gif = True
+        elif filename.endswith('.mp4'):
+            save_mp4 = True
+        else:
+            # No extension specified, save both formats
+            save_gif = True
+            save_mp4 = True
     
     # Find the maximum dose value across all timestamps
     max_dose = 0
@@ -534,7 +612,7 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
         
         # Set up default plot parameters that can be overridden by kwargs
         plot_params = {
-            'plot_title': f'GLE74 Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
+            'plot_title': f'Effective Dose Rate at {timestamp} (Altitude: {altitude} km)',
             'legend_label': f"Effective Dose Rate (μSv/hr)",
             'central_latitude': 50.0,
             'hue_range': (0, max_dose)
@@ -555,8 +633,11 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
     video = ani.to_jshtml()
     
     if save_gif:
-        # Save the animation to an animated GIF file
-        gif_filename = f"GLE_animation_{altitude}km.gif"
+        # Set filename for GIF
+        if filename is None:
+            gif_filename = f"GLE_animation_{altitude}km.gif"
+        else:
+            gif_filename = filename if filename.endswith('.gif') else f"{filename}.gif"
         
         # Create a temporary directory if it doesn't exist
         if not os.path.exists('animation_temp'):
@@ -586,8 +667,11 @@ def create_gle_globe_animation(results, altitude=12.192, save_gif=False, save_mp
             os.remove(frame_filename)
 
     if save_mp4:
-        # Save the animation as an MP4 video
-        mp4_filename = f"GLE_animation_{altitude}km_globe.mp4"
+        # Set filename for MP4
+        if filename is None:
+            mp4_filename = f"GLE_animation_{altitude}km_globe.mp4"
+        else:
+            mp4_filename = filename if filename.endswith('.mp4') else f"{filename}.mp4"
         
         # Set up the writer with desired parameters
         Writer = animation.writers['ffmpeg']

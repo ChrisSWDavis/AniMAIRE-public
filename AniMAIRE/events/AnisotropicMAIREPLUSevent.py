@@ -31,6 +31,7 @@ class ZeroDoseMAIREPLUSEvent(MAIREPLUS_event):
         """Initialize with the same parameters as MAIREPLUS_event but skip actual initialization."""
         # Store the parameters without calling parent __init__ to avoid computation
         self.params = kwargs
+        self.run_kwargs = kwargs  # Also store as run_kwargs for compatibility
         self.datetime = kwargs.get('datetime', [])
         self.dose_rates = {}
         self._is_zero_dose = True
@@ -42,38 +43,42 @@ class ZeroDoseMAIREPLUSEvent(MAIREPLUS_event):
         
     def run_AniMAIRE(self, use_cache: bool = True):
         """Override to create zero-filled dose rate frames without computation."""
+        # Import the default grid and altitudes from AniMAIRE
+        from AniMAIRE.anisotropic_MAIRE_engine.generalEngineInstance import default_array_of_lats_and_longs
+        from AniMAIRE.utils import validate_altitudes
+        
+        # Get the default altitude grid (this returns the standard AniMAIRE altitude levels)
+        default_altitudes_km = validate_altitudes(None, None)
+        
         # Create zero dose rate frames for each timestamp
         timestamps = self.datetime if hasattr(self.datetime, '__iter__') else [self.datetime]
         
         for ts in timestamps:
-            # Create a minimal dose rate frame with zeros
-            # We need to match the structure expected by the interpolation code
-            dose_df = pd.DataFrame({
-                'latitude': np.arange(-90, 91, 5),  # Basic grid
-                'longitude': np.arange(-180, 181, 10),
-                'altitude': 12.192,  # Default altitude
-                'edose': 0.0,
-                'adose': 0.0,
-                'dosee': 0.0,
-                'tn1': 0.0,
-                'SEU': 0.0,
-                'SEL': 0.0
-            })
+            # Create zero dose rate frame with the complete grid structure
+            # Extract latitudes and longitudes from the default array
+            latitudes = default_array_of_lats_and_longs[:, 0]
+            longitudes = default_array_of_lats_and_longs[:, 1]
             
-            # Expand to create full grid
-            lats = dose_df['latitude'].unique()
-            lons = dose_df['longitude'].unique()
-            full_grid = pd.DataFrame(
-                [(lat, lon) for lat in lats for lon in lons],
-                columns=['latitude', 'longitude']
-            )
-            full_grid['altitude'] = 12.192
-            full_grid['edose'] = 0.0
-            full_grid['adose'] = 0.0
-            full_grid['dosee'] = 0.0
-            full_grid['tn1'] = 0.0
-            full_grid['SEU'] = 0.0
-            full_grid['SEL'] = 0.0
+            # Create full grid with all combinations of lat, lon, and altitude
+            grid_data = []
+            for alt in default_altitudes_km:
+                for lat, lon in zip(latitudes, longitudes):
+                    grid_data.append({
+                        'latitude': lat,
+                        'longitude': lon,
+                        'altitude (km)': alt,  # Use correct column name with units
+                        'edose': 0.0,
+                        'adose': 0.0,
+                        'dosee': 0.0,
+                        'tn1': 0.0,
+                        'tn2': 0.0,
+                        'tn3': 0.0,
+                        'SEU': 0.0,
+                        'SEL': 0.0
+                    })
+            
+            # Create DataFrame with the complete grid
+            full_grid = pd.DataFrame(grid_data)
             
             # Create DoseRateFrame
             dose_frame = DoseRateFrame(full_grid)
@@ -81,7 +86,7 @@ class ZeroDoseMAIREPLUSEvent(MAIREPLUS_event):
             
             # Convert numpy datetime64 to Python datetime if needed
             if isinstance(ts, np.datetime64):
-                ts = pd.Timestamp(ts).to_pydatetime()
+                ts = pd.Timestamp(ts).to_pydatetime().replace(tzinfo=datetime.timezone.utc)
             
             self.dose_rates[ts] = dose_frame
     

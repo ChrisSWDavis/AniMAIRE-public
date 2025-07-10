@@ -12,7 +12,8 @@ from AniMAIRE.DoseRateFrame import DoseRateFrame
 from AniMAIRE.dose_plotting import create_gle_globe_animation, create_gle_map_animation, plot_dose_map, plot_on_spherical_globe
 import pandas as pd
 import numpy as np
-from scipy.interpolate import griddata
+from scipy.interpolate import RegularGridInterpolator, LinearNDInterpolator, NearestNDInterpolator, RBFInterpolator
+from scipy.spatial import cKDTree
 import datetime as dt
 from tqdm.auto import tqdm  # Progress bar for long-running operations
 from joblib import Memory  # For caching computation results
@@ -53,6 +54,134 @@ class BaseAniMAIREEvent:
         # Initialize common containers for components and results
         self.dose_rate_components: Dict = {}
         self.dose_rates: Dict[dt.datetime, DoseRateFrame] = {}
+        # Cache for interpolators to avoid rebuilding them
+        self._interpolator_cache: Dict[str, Any] = {}
+
+    def _get_cache_key(self, data: pd.DataFrame, dose_type: str, interpolation_method: str) -> str:
+        """
+        Generate a cache key for interpolator based on grid structure and parameters.
+        
+        Args:
+            data (pd.DataFrame): Input data with spatial coordinates
+            dose_type (str): Type of dose data being interpolated
+            interpolation_method (str): Interpolation method being used
+            
+        Returns:
+            str: Cache key for the interpolator
+        """
+        # Create a signature based on unique coordinate combinations and method
+        coords_hash = hash(tuple(sorted(zip(data['latitude'], data['longitude'], data['altitude (km)']))))
+        return f"{coords_hash}_{dose_type}_{interpolation_method}"
+
+    def _is_regular_grid(self, data: pd.DataFrame, tolerance: float = 1e-10) -> Tuple[bool, Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]]:
+        """
+        Check if data points form a regular 3D grid and return grid coordinates if so.
+        
+        Args:
+            data (pd.DataFrame): Input data with latitude, longitude, altitude columns
+            tolerance (float): Tolerance for detecting regular spacing
+            
+        Returns:
+            Tuple[bool, Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]]: 
+                (is_regular, (lat_coords, lon_coords, alt_coords)) where coordinates are None if irregular
+        """
+        try:
+            # Get unique coordinates for each dimension
+            lats = np.sort(data['latitude'].unique())
+            lons = np.sort(data['longitude'].unique())
+            alts = np.sort(data['altitude (km)'].unique())
+            
+            # Check if spacing is regular within tolerance
+            def is_regular_spacing(coords):
+                if len(coords) < 2:
+                    return True
+                diffs = np.diff(coords)
+                return np.allclose(diffs, diffs[0], rtol=tolerance, atol=tolerance)
+            
+            if not (is_regular_spacing(lats) and is_regular_spacing(lons) and is_regular_spacing(alts)):
+                return False, None
+            
+            # Check if we have all combinations (complete grid)
+            expected_points = len(lats) * len(lons) * len(alts)
+            if len(data) != expected_points:
+                return False, None
+            
+            return True, (lats, lons, alts)
+        except Exception:
+            return False, None
+
+    def _create_efficient_interpolator(self, data: pd.DataFrame, dose_type: str, 
+                                     interpolation_method: str) -> Any:
+        """
+        Create an efficient interpolator based on data structure and method.
+        
+        Args:
+            data (pd.DataFrame): Input data with spatial coordinates and dose values
+            dose_type (str): Column name for dose values
+            interpolation_method (str): Interpolation method
+            
+        Returns:
+            Any: Appropriate interpolator object
+        """
+        # Check if grid is regular
+        is_regular, grid_coords = self._is_regular_grid(data)
+        
+        if is_regular and grid_coords is not None:
+            # Use RegularGridInterpolator for regular grids (much faster)
+            lats, lons, alts = grid_coords
+            
+            # Reshape dose values to match grid structure
+            grid_shape = (len(lats), len(lons), len(alts))
+            dose_values = np.full(grid_shape, np.nan)
+            
+            for _, row in data.iterrows():
+                lat_idx = np.searchsorted(lats, row['latitude'])
+                lon_idx = np.searchsorted(lons, row['longitude'])
+                alt_idx = np.searchsorted(alts, row['altitude (km)'])
+                dose_values[lat_idx, lon_idx, alt_idx] = row[dose_type]
+            
+            # Map interpolation methods to RegularGridInterpolator methods
+            method_map = {
+                'linear': 'linear',
+                'nearest': 'nearest',
+                'cubic': 'cubic',
+                'slinear': 'linear',  # Fallback to linear
+                'quadratic': 'linear',  # Fallback to linear (not supported)
+                'quintic': 'linear'  # Fallback to linear (not supported)
+            }
+            
+            reg_method = method_map.get(interpolation_method, 'linear')
+            
+            return RegularGridInterpolator(
+                (lats, lons, alts), 
+                dose_values, 
+                method=reg_method,
+                bounds_error=False,
+                fill_value=np.nan
+            )
+        
+        else:
+            # Use scattered data interpolators for irregular grids
+            points = data[['latitude', 'longitude', 'altitude (km)']].values
+            values = data[dose_type].values
+            
+            if interpolation_method == 'nearest':
+                return NearestNDInterpolator(points, values)
+            elif interpolation_method in ['linear', 'slinear']:
+                return LinearNDInterpolator(points, values, fill_value=np.nan)
+            elif interpolation_method == 'cubic':
+                # Use RBF with cubic kernel for cubic interpolation on irregular grids
+                return RBFInterpolator(points, values, kernel='cubic', smoothing=0.0)
+            elif interpolation_method in ['quadratic', 'quintic']:
+                # Use RBF with appropriate kernels
+                kernel = 'quintic' if interpolation_method == 'quintic' else 'quadratic'
+                return RBFInterpolator(points, values, kernel=kernel, smoothing=0.0)
+            elif interpolation_method == 'rbf':
+                # Default RBF interpolation
+                return RBFInterpolator(points, values, kernel='thin_plate_spline', smoothing=0.0)
+            else:
+                # Default to linear
+                return LinearNDInterpolator(points, values, fill_value=np.nan)
 
     def __repr__(self) -> str:
         """
@@ -432,14 +561,20 @@ class BaseAniMAIREEvent:
         return nearest_alt
 
     def create_gle_map_animation(self, altitude: Optional[float] = None, save_gif: bool = False, 
-                              save_mp4: bool = False, **kwargs: Any) -> HTML:
+                              save_mp4: bool = False, filename: Optional[str] = None, **kwargs: Any) -> HTML:
         """
         Create a 2D map animation of dose rates at a given altitude over time.
         
         Args:
             altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
             save_gif (bool, optional): Whether to save as GIF. Defaults to False.
+                Automatically set to True if filename ends with '.gif' or has no extension.
             save_mp4 (bool, optional): Whether to save as MP4. Defaults to False.
+                Automatically set to True if filename ends with '.mp4' or has no extension.
+            filename (Optional[str], optional): Base filename for saving animation files. 
+                If provided, automatically enables saving in the appropriate format(s).
+                Extensions will be added automatically if not present.
+                If no extension is specified, both GIF and MP4 will be saved.
             **kwargs: Additional keyword arguments passed to the animation function
             
         Returns:
@@ -453,17 +588,23 @@ class BaseAniMAIREEvent:
         if altitude is not None and abs(best_altitude - altitude) > 0.1:
             print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
             
-        return create_gle_map_animation(self.dose_rates, best_altitude, save_gif, save_mp4, **kwargs)
+        return create_gle_map_animation(self.dose_rates, best_altitude, save_gif, save_mp4, filename, **kwargs)
 
     def create_gle_globe_animation(self, altitude: Optional[float] = None, save_gif: bool = False, 
-                                  save_mp4: bool = False, **kwargs: Any) -> HTML:
+                                  save_mp4: bool = False, filename: Optional[str] = None, **kwargs: Any) -> HTML:
         """
         Create a 3D globe animation of dose rates at a given altitude over time.
         
         Args:
             altitude (Optional[float], optional): Altitude in kilometers. If None, uses 12.192 km (40,000 ft) if available.
             save_gif (bool, optional): Whether to save as GIF. Defaults to False.
+                Automatically set to True if filename ends with '.gif' or has no extension.
             save_mp4 (bool, optional): Whether to save as MP4. Defaults to False.
+                Automatically set to True if filename ends with '.mp4' or has no extension.
+            filename (Optional[str], optional): Base filename for saving animation files.
+                If provided, automatically enables saving in the appropriate format(s).
+                Extensions will be added automatically if not present.
+                If no extension is specified, both GIF and MP4 will be saved.
             **kwargs: Additional keyword arguments passed to the animation function
             
         Returns:
@@ -477,7 +618,7 @@ class BaseAniMAIREEvent:
         if altitude is not None and abs(best_altitude - altitude) > 0.1:
             print(f"Requested altitude {altitude} km not available. Using nearest available altitude: {best_altitude} km")
             
-        return create_gle_globe_animation(self.dose_rates, best_altitude, save_gif, save_mp4, **kwargs)
+        return create_gle_globe_animation(self.dose_rates, best_altitude, save_gif, save_mp4, filename, **kwargs)
 
     def create_spectra_animation(self, output_filename: str = 'GLE74_spectra_animation.mp4', 
                                 fps: int = 2, spectra_xlim: Tuple[float, float] = (0.1, 20), 
@@ -625,7 +766,7 @@ class BaseAniMAIREEvent:
                                   nearest_ts: bool = True, 
                                   interpolation_method: str = 'linear') -> Optional[float]:
         """
-        Interpolate dose rate at a specific geographic location and time.
+        Interpolate dose rate at a specific geographic location and time using efficient methods.
         
         Args:
             latitude (float): Geographic latitude in degrees
@@ -635,34 +776,35 @@ class BaseAniMAIREEvent:
             dose_type (str, optional): Dose rate type to retrieve. Defaults to 'edose'.
             nearest_ts (bool, optional): If True, use nearest timestamp if exact not found. Defaults to True.
             interpolation_method (str, optional): Method for interpolation. Defaults to 'linear'.
-                                                 Can be 'linear', 'nearest', or 'cubic'.
+                                                 Supported methods: 'linear', 'nearest', 'cubic', 'slinear',
+                                                 'quadratic', 'quintic', 'rbf'
             
         Returns:
             Optional[float]: Interpolated dose rate at the requested location and time, or None if
                             data is not available or interpolation fails
         """
+        # Get the dose rate frame for the specified timestamp
         frame = self.get_dose_rate_frame(timestamp, nearest=nearest_ts)
-        if frame is None: return None
-        tol = 0.1
-        data = frame.query(f"`altitude (km)` >= {altitude-tol} & `altitude (km)` <= {altitude+tol}")
-        if data.empty: return None
-        if data['altitude (km)'].nunique()>1:
-            alt0 = data.iloc[(data['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
-            data = data[data['altitude (km)']==alt0]
-        if dose_type not in data.columns: return None
+        if frame is None: 
+            return None
         
-        # Handle case with only one latitude/longitude point
-        if len(data) == 1:
-            # If there's only one point, return its value directly if it matches the requested coordinates
-            # or use nearest neighbor approach
-            point = data.iloc[0]
-            if abs(point['latitude'] - latitude) < 1e-6 and abs(point['longitude'] - longitude) < 1e-6:
-                return float(point[dose_type])
-            else:
-                # Calculate distance to the single point
-                dist = ((point['latitude'] - latitude)**2 + (point['longitude'] - longitude)**2)**0.5
-                # Return the value if it's close enough, otherwise None
-                return float(point[dose_type]) if dist < 10.0 else None
+        # Convert to DataFrame if it's not already
+        if hasattr(frame, 'to_pandas'):
+            data = frame.to_pandas()
+        elif hasattr(frame, 'data'):
+            data = frame.data.copy()
+        else:
+            data = pd.DataFrame(frame)
+        
+        # Check if the requested dose type column exists in the data
+        if dose_type not in data.columns: 
+            return None
+        
+        # Remove rows with NaN values in required columns
+        required_cols = ['latitude', 'longitude', 'altitude (km)', dose_type]
+        data = data.dropna(subset=required_cols)
+        if data.empty:
+            return None
             
         # Handle longitude wrapping for interpolation
         # Copy longitude = 0.0 rows to longitude = 360.0 for better interpolation
@@ -677,10 +819,47 @@ class BaseAniMAIREEvent:
             max_lon_data['longitude'] = 0.0
             data = pd.concat([data, max_lon_data], ignore_index=True)
         
-        # Normal interpolation for multiple points
-        pts = data[['latitude','longitude']].values; vals=data[dose_type].values
-        interp=griddata(pts, vals, (latitude,longitude), method=interpolation_method)
-        return None if np.isnan(interp) else float(interp)
+        # Try to get cached interpolator
+        cache_key = self._get_cache_key(data, dose_type, interpolation_method)
+        if cache_key in self._interpolator_cache:
+            interpolator = self._interpolator_cache[cache_key]
+        else:
+            # Create and cache new interpolator
+            try:
+                interpolator = self._create_efficient_interpolator(data, dose_type, interpolation_method)
+                self._interpolator_cache[cache_key] = interpolator
+            except Exception as e:
+                # Fallback to simple nearest neighbor if interpolator creation fails
+                points = data[['latitude', 'longitude', 'altitude (km)']].values
+                values = data[dose_type].values
+                tree = cKDTree(points)
+                _, nearest_idx = tree.query([latitude, longitude, altitude], k=1)
+                return float(values[nearest_idx]) if not np.isnan(values[nearest_idx]) else None
+        
+        # Perform interpolation
+        try:
+            if hasattr(interpolator, '__call__'):
+                # For RegularGridInterpolator and RBF interpolators
+                result = interpolator([latitude, longitude, altitude])
+                if np.isscalar(result):
+                    interp_value = result
+                else:
+                    interp_value = result[0] if len(result) > 0 else np.nan
+            else:
+                # For other interpolator types
+                interp_value = interpolator((latitude, longitude, altitude))
+            
+            # Return None if interpolation resulted in NaN, otherwise return the float value
+            return None if np.isnan(interp_value) else float(interp_value)
+            
+        except Exception:
+            # Fallback to nearest neighbor interpolation if main interpolation fails
+            points = data[['latitude', 'longitude', 'altitude (km)']].values
+            values = data[dose_type].values
+            tree = cKDTree(points)
+            _, nearest_idx = tree.query([latitude, longitude, altitude], k=1)
+            nearest_value = values[nearest_idx]
+            return None if np.isnan(nearest_value) else float(nearest_value)
 
     def _get_target_grid(self, target_grid: Optional[np.ndarray] = None, 
                          n_lat: int = 90, n_lon: int = 180) -> np.ndarray:
@@ -731,24 +910,52 @@ class BaseAniMAIREEvent:
             Optional[pd.DataFrame]: DataFrame with columns (latitude, longitude, integrated_dose_type_uSv),
                                    or None if no data available at specified altitude
         """
-        times=sorted(self.dose_rates.keys()); first=self.dose_rates[times[0]]
-        tol=0.1; df0=first.query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
-        if df0.empty: return None
-        if df0['altitude (km)'].nunique()>1:
-            alt0=df0.iloc[(df0['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
-            df0=df0[df0['altitude (km)']==alt0]
-        idx=pd.MultiIndex.from_frame(df0[['latitude','longitude']]); acc=pd.Series(0.0,index=idx)
-        dts=self._calculate_time_deltas()
-        for i,ts in enumerate(times):
-            df=self.dose_rates[ts].query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
-            if df.empty: continue
-            if df['altitude (km)'].nunique()>1:
-                altn=df.iloc[(df['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
-                df=df[df['altitude (km)']==altn]
-            if dose_type not in df.columns: continue
-            s=df.set_index(['latitude','longitude'])[dose_type]
-            acc=acc.add(s*dts[i],fill_value=0)
-        out=acc.reset_index().rename(columns={0:f'integrated_{dose_type}_uSv'})
+        # Get sorted list of timestamps and first dose rate data
+        times = sorted(self.dose_rates.keys())
+        first = self.dose_rates[times[0]]
+        
+        # Tolerance for altitude matching (0.1 km)
+        tol = 0.1
+        
+        # Filter first dataset for requested altitude with tolerance
+        df0 = first.query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+        if df0.empty: 
+            return None
+        
+        # If multiple altitudes found within tolerance, select the closest one
+        if df0['altitude (km)'].nunique() > 1:
+            alt0 = df0.iloc[(df0['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+            df0 = df0[df0['altitude (km)'] == alt0]
+        
+        # Create multi-index from latitude/longitude pairs and initialize accumulator
+        idx = pd.MultiIndex.from_frame(df0[['latitude','longitude']])
+        acc = pd.Series(0.0, index=idx)
+        
+        # Calculate time intervals between timestamps
+        dts = self._calculate_time_deltas()
+        
+        # Iterate through each timestamp to accumulate dose
+        for i, ts in enumerate(times):
+            # Filter current dataset for requested altitude with tolerance
+            df = self.dose_rates[ts].query(f"`altitude (km)`>={altitude-tol}&`altitude (km)`<={altitude+tol}")
+            if df.empty: 
+                continue
+            
+            # If multiple altitudes found within tolerance, select the closest one
+            if df['altitude (km)'].nunique() > 1:
+                altn = df.iloc[(df['altitude (km)']-altitude).abs().argsort()]['altitude (km)'].iloc[0]
+                df = df[df['altitude (km)'] == altn]
+            
+            # Skip if dose_type column doesn't exist
+            if dose_type not in df.columns: 
+                continue
+            
+            # Extract dose values and add to accumulator (dose rate * time interval)
+            s = df.set_index(['latitude','longitude'])[dose_type]
+            acc = acc.add(s * dts[i], fill_value=0)
+        
+        # Convert accumulator to DataFrame and rename column
+        out = acc.reset_index().rename(columns={0: f'integrated_{dose_type}_uSv'})
         return out
 
     def get_peak_dose_rate_map(self, altitude, dose_type='edose'):
@@ -1154,6 +1361,15 @@ class BaseAniMAIREEvent:
             frames.append(df)
         return pd.concat(frames, ignore_index=True)
 
+    def clear_interpolator_cache(self) -> None:
+        """
+        Clear the cached interpolators to free memory.
+        
+        This method should be called when the dose rate data changes or when memory usage
+        becomes a concern, as interpolators can be memory-intensive for large datasets.
+        """
+        self._interpolator_cache.clear()
+
 class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
     """
     Event class for modeling solar particle events using double power-law rigidity spectrum and Gaussian pitch-angle distribution.
@@ -1265,6 +1481,9 @@ class DoublePowerLawGaussianEvent(BaseAniMAIREEvent):
         Returns:
             Dict[dt.datetime, DoseRateFrame]: Dictionary of dose rate frames keyed by timestamp
         """
+        # Clear interpolator cache since we're computing new data
+        self.clear_interpolator_cache()
+        
         # Initialize the dose_rates dictionary
         self.dose_rates = {}  # Use dictionary instead of list
         

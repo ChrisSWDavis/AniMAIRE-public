@@ -263,7 +263,7 @@ class DoseRateFrame(pd.DataFrame):
         result.run_parameters = self.run_parameters
         return result
 
-    def plot_dose_map(self, altitude=12.192, title=None,**kwargs):
+    def plot_dose_map(self, altitude=12.192, title=None, save_plot=False, filename=None, **kwargs):
         """
         Plot a 2D dose rate map at a specific altitude using AniMAIRE plotting tools.
 
@@ -273,8 +273,10 @@ class DoseRateFrame(pd.DataFrame):
             The altitude in km for which to plot the dose map. Default is 12.192 km.
         title : str, optional
             Title for the plot. If None, uses the timestamp if available.
-        ax : matplotlib.axes.Axes, optional
-            Axes on which to draw the plot. If None, creates a new figure.
+        save_plot : bool, optional
+            Whether to save the plot to a file. Default is False.
+        filename : str, optional
+            Custom filename for saving the plot. If None, uses default naming pattern.
         **kwargs : additional keyword arguments
             Additional arguments passed to dose_plotting.plot_dose_map
 
@@ -293,11 +295,11 @@ class DoseRateFrame(pd.DataFrame):
             title = f'Dose Rate Map at {self.timestamp.strftime("%Y-%m-%d %H:%M:%S")} (Altitude: {altitude} km)'
 
         # Use AniMAIRE's plotting function
-        output_plot = plot_dose_map(data_at_alt,plot_title=title,**kwargs)
+        output_plot = plot_dose_map(data_at_alt, plot_title=title, save_plot=save_plot, filename=filename, **kwargs)
 
         return plt.gca()
 
-    def plot_on_globe(self, altitude=12.192, **kwargs):
+    def plot_on_globe(self, altitude=12.192, save_plot=False, filename=None, **kwargs):
         """
         Plot dose rate data on a 3D globe using AniMAIRE plotting tools.
 
@@ -305,6 +307,10 @@ class DoseRateFrame(pd.DataFrame):
         -----------
         altitude : float, optional
             The altitude in km for which to plot the data. Default is 12.192 km.
+        save_plot : bool, optional
+            Whether to save the plot to a file. Default is False.
+        filename : str, optional
+            Custom filename for saving the plot. If None, uses default naming pattern.
         **kwargs : additional keyword arguments
             Additional arguments passed to dose_plotting.plot_on_spherical_globe
 
@@ -319,7 +325,7 @@ class DoseRateFrame(pd.DataFrame):
         if 'plot_title' not in kwargs and self.timestamp:
             kwargs['plot_title'] = f'Dose Rate at {self.timestamp.strftime("%Y-%m-%d %H:%M:%S")} (Altitude: {altitude} km)'
 
-        return plot_on_spherical_globe(data_at_alt, **kwargs)
+        return plot_on_spherical_globe(data_at_alt, save_plot=save_plot, filename=filename, **kwargs)
 
     def get_max_dose(self, altitude=None):
         """

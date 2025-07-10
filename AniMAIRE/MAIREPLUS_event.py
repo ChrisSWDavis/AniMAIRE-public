@@ -1303,6 +1303,8 @@ class MAIREPLUS_event(BaseAniMAIREEvent):
 
             # Extract run timestamp for indexing
             timestamp = getattr(dose_rate_frame, 'timestamp', None)
+            if isinstance(timestamp, np.datetime64):
+                timestamp = timestamp.astype(dt.datetime).replace(tzinfo=dt.timezone.utc)
 
             # Store the frame in both results and components
             self.dose_rates[timestamp] = dose_rate_frame
