@@ -136,22 +136,25 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         # Calculate asymptotic directions using OTSO.planet
         # Set default externalmag if not provided in kwargs
         if 'externalmag' not in kwargs:
-            kwargs['externalmag'] = "TSY89_BOBERG"
+            kwargs['externalmag'] = "TSY89c"
+
+        if 'boberg' not in kwargs:
+            kwargs['boberg'] = "YES"
+            kwargs['bobergtype'] = "EXTENSION"
             
         planet_result = OTSO.planet(
-            array_of_lats_and_longs=array_of_lats_and_longs,
-            corenum=corenum,
-            asymptotic="YES",
-            asymlevels=energy_levels_GeV,
-            kp=kpIndex,
-            year=dateAndTime.year,
-            month=dateAndTime.month,
-            day=dateAndTime.day,
-            hour=dateAndTime.hour,
-            minute=dateAndTime.minute,
-            second=dateAndTime.second,
-            zenith=zenith,
-            azimuth=azimuth,
+            grid_params={"array_of_lats_and_longs": array_of_lats_and_longs},
+            computation_params={"corenum": corenum},
+            asymptotic_params={"asymptotic": "YES", "asymlevels": energy_levels_GeV},
+            magfield_params={"model": kwargs['externalmag'], "boberg": kwargs['boberg'], "bobergtype": kwargs['bobergtype']},
+            geomagnetic={"kp": kpIndex},
+            datetime_params={"year": dateAndTime.year, 
+                             "month": dateAndTime.month, 
+                             "day": dateAndTime.day, 
+                             "hour": dateAndTime.hour, 
+                             "minute": dateAndTime.minute, 
+                             "second": dateAndTime.second},
+            particle_params={"zenith": zenith, "azimuth": azimuth},
             **kwargs
         )
         
