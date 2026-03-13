@@ -62,7 +62,7 @@ setup(
                         'netCDF4 >= 1.7.2',
                         'imageio >= 2.37.0',
                         'psutil >= 7.0.0',
-                        'OTSO >= 1.2.2',
+                        'OTSO >= 1.2.4',
                         'geopy >= 2.0.0',
                         'pynverse >= 0.1.4.6',
                         'xgboost >= 1.6.0',
