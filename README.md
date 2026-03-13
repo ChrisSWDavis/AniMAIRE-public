@@ -652,7 +652,7 @@ gle_object = run_from_GLE_spectrum_file(
 ## References
 
 - Davis, C. S. W. et al. (2024). *AniMAIRE-A New Openly Available Tool for Calculating Atmospheric Ionising Radiation Dose Rates and Single Event Effects During Anisotropic Conditions*. [https://doi.org/10.1029/2024SW003985](https://doi.org/10.1029/2024SW003985)
-- Larsen, N. et al. (2024). *A New Open-Source Geomagnetosphere Propagation Tool (OTSO) and Its Applications*. [https://doi.org/10.1029/2022JA031061](https://doi.org/10.1029/2022JA031061)
+- Larsen, N. et al. (2023). *A New Open-Source Geomagnetosphere Propagation Tool (OTSO) and Its Applications*. [https://doi.org/10.1029/2022JA031061](https://doi.org/10.1029/2022JA031061)
 - Desorgher, L. (2004). *MAGNETOCOSMICS: Geant4 application for simulating the propagation of cosmic rays through the Earth's magnetosphere*. Technical Report, University of Bern. [http://cosray.unibe.ch/~laurent/magnetocosmics/](http://cosray.unibe.ch/~laurent/magnetocosmics/)
 - Mishev, A. & Usoskin, I. (2016). Analysis of the Ground-Level Enhancements on 14 July 2000 and 13 December 2006 Using Neutron Monitor Data. *Solar Physics, 291*, 1225–1239. [https://doi.org/10.1007/s11207-016-0877-2](https://doi.org/10.1007/s11207-016-0877-2)
 - Matthiä, D. et al. (2012). *A ready-to-use galactic cosmic ray model*, [https://doi.org/10.1016/j.asr.2012.09.022](https://doi.org/10.1016/j.asr.2012.09.022)
