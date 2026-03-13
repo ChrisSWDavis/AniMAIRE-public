@@ -139,14 +139,22 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
             kwargs['externalmag'] = "TSY89c"
 
         if 'boberg' not in kwargs:
-            kwargs['boberg'] = "YES"
+            kwargs['boberg'] = True
             kwargs['bobergtype'] = "EXTENSION"
+
+        extern=kwargs['externalmag']
+        boberg=kwargs['boberg']
+        bobergtype=kwargs['bobergtype']
+
+        kwargs.pop('externalmag', None)
+        kwargs.pop('boberg', None)
+        kwargs.pop('bobergtype', None)
             
         planet_result = OTSO.planet(
             grid_params={"array_of_lats_and_longs": array_of_lats_and_longs},
             computation_params={"corenum": corenum},
             asymptotic_params={"asymptotic": "YES", "asymlevels": energy_levels_GeV},
-            magfield_params={"model": kwargs['externalmag'], "boberg": kwargs['boberg'], "bobergtype": kwargs['bobergtype']},
+            magfield_params={"model": extern, "boberg": boberg, "bobergtype": bobergtype},
             geomagnetic={"kp": kpIndex},
             datetime_params={"year": dateAndTime.year, 
                              "month": dateAndTime.month, 
@@ -155,6 +163,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                              "minute": dateAndTime.minute, 
                              "second": dateAndTime.second},
             particle_params={"zenith": zenith, "azimuth": azimuth},
+            integration_params={"gyropercent": 15, "betaerror": 0.01},
             **kwargs
         )
         
