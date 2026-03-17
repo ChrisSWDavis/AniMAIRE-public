@@ -193,7 +193,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             minRigValue=0.1,
                             nIncrements_high=60,
                             nIncrements_low=200,
-                            corenum=max(1, (psutil.cpu_count(logical=False) or 1) - 2), 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 1)),
                             **kwargs):
     """
     Calculate asymptotic directions for a wide range of rigidities by combining high and low rigidity ranges.
