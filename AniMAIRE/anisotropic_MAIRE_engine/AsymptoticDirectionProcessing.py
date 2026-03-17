@@ -184,9 +184,8 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     new_asymptotic_direction_DF = asymptotic_direction_DF.copy()
     new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
 
-    # Check if we have an isotropic pitch angle distribution with fast mode
-    is_isotropic_fast = (isinstance(momentaDist.getPitchAngleDistribution(), IsotropicPitchAngleDistribution) and 
-                        getattr(momentaDist.getPitchAngleDistribution(), 'use_fast_calculation', False))
+    # For isotropic PADs, pitch-angle weighting is exactly 1 regardless of angle and rigidity.
+    is_isotropic = isinstance(momentaDist.getPitchAngleDistribution(), IsotropicPitchAngleDistribution)
 
     print("calculating rigidity weighting factors...")
     rigidity_spectrum = momentaDist.getRigiditySpectrum()
@@ -196,7 +195,7 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     }
     new_asymptotic_direction_DF["RigidityWeightingFactor"] = new_asymptotic_direction_DF["Rigidity"].map(rigidity_factor_by_rigidity)
 
-    if not is_isotropic_fast:
+    if not is_isotropic:
         # find weighting factors from the angles and rigidities
         def pitchAngleFunctionToUse(row):
             """
@@ -219,8 +218,8 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
             * new_asymptotic_direction_DF["Filter"]
         )
     else:
-        # For isotropic fast mode, set pitch angle factor to 1 and full rigidity pitch factor to rigidity factor
-        print("using isotropic fast mode: setting pitch angle weighting factors to 1")
+        # For isotropic mode, set pitch angle factor to 1 and full rigidity pitch factor to rigidity factor.
+        print("using isotropic mode: setting pitch angle weighting factors to 1")
         new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = 1.0
         print("setting full rigidity pitch weighting factors equal to rigidity weighting factors...")
         new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = (

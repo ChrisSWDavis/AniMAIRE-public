@@ -30,6 +30,7 @@ def run_from_spectra(
         date_and_time: Optional[dt.datetime] = None,
         array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
         cache_asymptotic_directions: bool = True,
+        use_rigidity_predictor_if_isotropic: bool = False,
         generate_NM_count_rates: bool = False,
         use_default_9_zeniths_azimuths: bool = False,
         use_OTSOpy: bool = True,
@@ -65,6 +66,9 @@ def run_from_spectra(
         Array of latitudes and longitudes to perform calculations for.
     - cache_asymptotic_directions: bool, optional
         Whether to cache the results of asymptotic direction calculations.
+    - use_rigidity_predictor_if_isotropic: bool, optional
+        If True and all active particle pitch-angle distributions are isotropic, bypass OTSO/Magnetocosmics
+        and use the built-in rigidity predictor approximation for much faster runs.
     - generate_NM_count_rates: bool, optional
         Whether to generate neutron monitor count rates.
     - use_default_9_zeniths_azimuths: bool, optional
@@ -125,6 +129,7 @@ def run_from_spectra(
                                           reference_longitude=reference_pitch_angle_longitude,
                                           array_of_lats_and_longs=array_of_lats_and_longs,
                                           cache_magnetocosmics_runs=cache_asymptotic_directions,
+                                          use_rigidity_predictor_if_isotropic=use_rigidity_predictor_if_isotropic,
                                           generate_NM_count_rates=generate_NM_count_rates,
                                           asymp_dir_file=asymp_dir_file)
     

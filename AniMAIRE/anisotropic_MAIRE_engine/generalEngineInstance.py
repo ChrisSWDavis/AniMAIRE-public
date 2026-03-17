@@ -67,6 +67,7 @@ class generalEngineInstance:
                  reference_longitude: float = 45.0,
                  array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
                  cache_magnetocosmics_runs: bool = True,
+                 use_rigidity_predictor_if_isotropic: bool = False,
                  generate_NM_count_rates: bool = False,
                  asymp_dir_file: Optional[str] = None):
         """
@@ -107,6 +108,7 @@ class generalEngineInstance:
         self.array_of_lats_and_longs = array_of_lats_and_longs
 
         self.cache_magnetocosmics_runs = cache_magnetocosmics_runs
+        self.use_rigidity_predictor_if_isotropic = use_rigidity_predictor_if_isotropic
         self.generate_NM_count_rates = generate_NM_count_rates
         self.asymp_dir_file = asymp_dir_file
 
@@ -159,11 +161,16 @@ class generalEngineInstance:
         else:
             asymptotic_directions_function = AsympDirsTools.get_magcos_asymp_dirs
         list_of_pads = [dist.momentum_distribution.pitch_angle_distribution for dist in self.list_of_particle_distributions]
+        all_isotropic = all(isinstance(dist, IsotropicPitchAngleDistribution) for dist in list_of_pads)
+        all_isotropic_fast = all(
+            isinstance(dist, IsotropicPitchAngleDistribution) and dist.use_fast_calculation
+            for dist in list_of_pads
+        )
 
         if self.asymp_dir_file:
             raw_asymp_df = self.get_raw_asymp_DF_from_file(self.asymp_dir_file)
         # # Check if all particle distributions are isotropic with fast mode enabled
-        elif all(isinstance(dist, IsotropicPitchAngleDistribution) and dist.use_fast_calculation for dist in list_of_pads):
+        elif all_isotropic and (all_isotropic_fast or self.use_rigidity_predictor_if_isotropic):
         #   initialLatitude  initialLongitude  Rigidity      Lat     Long  Filter
             
             cutoff_rigidity_predictions = RigidityPredictor.load().batch_predict(pd.DataFrame( {
@@ -231,13 +238,18 @@ class generalEngineInstance:
                 
         if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
             raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
-        processed_df = generate_asymp_dir_DF(
-            raw_asymp_df,
-            self.reference_latitude,
-            self.reference_longitude,
-            self.date_and_time,
-            cache=self.cache_magnetocosmics_runs
-        )
+        if all_isotropic:
+            # Isotropic distributions are independent of pitch angle, so skip expensive angle generation.
+            processed_df = raw_asymp_df.copy()
+            processed_df["angleBetweenIMFinRadians"] = 0.0
+        else:
+            processed_df = generate_asymp_dir_DF(
+                raw_asymp_df,
+                self.reference_latitude,
+                self.reference_longitude,
+                self.date_and_time,
+                cache=self.cache_magnetocosmics_runs
+            )
         if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
             processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
         self.df_of_asymptotic_directions = processed_df
