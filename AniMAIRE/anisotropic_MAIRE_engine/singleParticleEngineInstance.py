@@ -88,19 +88,16 @@ class singleParticleEngineInstance:
         """
         Calculate output dose and flux.
         """
-        DFofSpectraForEachCoord = asymp_dir_DF_with_weighting_factors.groupby(
-            ["initialLatitude", "initialLongitude"], sort=False
-        )[["Rigidity", "fullRigidityPitchWeightingFactor"]].agg(list)
+        spectrum_to_function_conversion_function = lambda row: interp1d(x=np.array(row["Rigidity"]),
+                                                                        y=np.array(row["fullRigidityPitchWeightingFactor"]),
+                                                                        bounds_error=False,
+                                                                        fill_value=0.0)
 
-        outputDoseRatesForAltitudeRange = get_apply_method(DFofSpectraForEachCoord)(
-            lambda row: DAFcalc.calculate_from_rigidity_spec_array(
-                inputRigidityBins=np.array(row["Rigidity"], dtype=float),
-                inputFluxesGV=np.array(row["fullRigidityPitchWeightingFactor"], dtype=float),
-                altitudesInkm=list_of_altitudes_in_km,
-                particleName=particle_name,
-            ),
-            axis=1,
-        )
+        DFofSpectraForEachCoord = asymp_dir_DF_with_weighting_factors.groupby(["initialLatitude","initialLongitude"], sort=False).apply(spectrum_to_function_conversion_function)
+        outputDoseRatesForAltitudeRange = get_apply_method(DFofSpectraForEachCoord)(lambda spectrum: DAFcalc.calculate_from_rigidity_spec(
+                                                                                                inputRigidityDistributionFunctionGV=lambda x: float(spectrum(x)),
+                                                                                                altitudesInkm=list_of_altitudes_in_km,
+                                                                                                particleName=particle_name))
 
         outputDoseRatesOnlyDF = pd.concat(outputDoseRatesForAltitudeRange.tolist(), ignore_index=True)
 
