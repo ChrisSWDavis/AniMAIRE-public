@@ -1,13 +1,35 @@
 import datetime as dt
 
 import numpy as np
+import pandas as pd
 from AniMAIRE import AniMAIRE
+from pandas.testing import assert_frame_equal
 
 import os
+import shutil
 import pytest
 
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
+MAGNETOCOSMICS_AVAILABLE = shutil.which("magnetocosmics") is not None
+pytestmark = pytest.mark.skipif(
+    not MAGNETOCOSMICS_AVAILABLE,
+    reason="MAGNETOCOSMICS binary not installed in this environment.",
+)
+
+DOSE_RATE_COLUMNS = [
+    "latitude",
+    "longitude",
+    "altitude (km)",
+    "edose",
+    "adose",
+    "dosee",
+    "tn1",
+    "tn2",
+    "tn3",
+    "SEU",
+    "SEL",
+]
 
 """
 Unit tests for the anisotropic MAIRE module.
@@ -32,6 +54,22 @@ def custom_round(x):
     else:
         # Otherwise, use fixed point with 6 decimal places.
         return float(format(x, '.6f'))
+
+
+def _as_sorted_dose_frame(rows):
+    return pd.DataFrame(rows, columns=DOSE_RATE_COLUMNS).sort_values(
+        ["latitude", "longitude", "altitude (km)"]
+    ).reset_index(drop=True)
+
+
+def assert_dose_rows_close(actual_rows, expected_rows, rtol=1e-6, atol=1e-10):
+    assert_frame_equal(
+        _as_sorted_dose_frame(actual_rows),
+        _as_sorted_dose_frame(expected_rows),
+        check_exact=False,
+        rtol=rtol,
+        atol=atol,
+    )
 
 
 
@@ -113,7 +151,7 @@ def test_Common_spec_max_asymp_dir():
         cache_asymptotic_directions=False,
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_output))
+    assert_dose_rows_close(result, expected_output)
 
 
 # def test_run_from_spectra():
@@ -170,7 +208,7 @@ def test_run_from_spectra_two_locations():
                         #record_full_output=True,
                         )
     
-    assert np.allclose(np.array(result.values.tolist()), np.array(expected_output_doses))
+    assert_dose_rows_close(result.values.tolist(), expected_output_doses)
 
 # def test_run_from_spectra_proton_only():
 #     result = AniMAIRE.run_from_spectra(proton_rigidity_spectrum=lambda x:1,
@@ -249,7 +287,7 @@ def test_DLR_spec_no_tzinfo():
         cache_asymptotic_directions=False,
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_dlr_spec))
+    assert_dose_rows_close(result, expected_dlr_spec)
 
 @pytest.mark.skipif(
     IN_GITHUB_ACTIONS,
@@ -297,7 +335,7 @@ def test_DLR_spec():
         cache_asymptotic_directions=False,
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_dlr_spec))
+    assert_dose_rows_close(result, expected_dlr_spec)
 
 def test_isotropic_dose_rates():
     test_isotropic_dose_rates = AniMAIRE.run_from_spectra(

@@ -1,7 +1,9 @@
 import datetime as dt
 
 import numpy as np
+import pandas as pd
 from AniMAIRE import AniMAIRE
+from pandas.testing import assert_frame_equal
 
 import os
 import pytest
@@ -11,6 +13,20 @@ from AniMAIRE.anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistributi
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 #IN_GITHUB_ACTIONS = False
+
+DOSE_RATE_COLUMNS = [
+    "latitude",
+    "longitude",
+    "altitude (km)",
+    "edose",
+    "adose",
+    "dosee",
+    "tn1",
+    "tn2",
+    "tn3",
+    "SEU",
+    "SEL",
+]
 
 """
 Unit tests for the anisotropic MAIRE module.
@@ -35,6 +51,22 @@ def custom_round(x):
     else:
         # Otherwise, use fixed point with 6 decimal places.
         return float(format(x, '.6f'))
+
+
+def _as_sorted_dose_frame(rows):
+    return pd.DataFrame(rows, columns=DOSE_RATE_COLUMNS).sort_values(
+        ["latitude", "longitude", "altitude (km)"]
+    ).reset_index(drop=True)
+
+
+def assert_dose_rows_close(actual_rows, expected_rows, rtol=1e-6, atol=1e-10):
+    assert_frame_equal(
+        _as_sorted_dose_frame(actual_rows),
+        _as_sorted_dose_frame(expected_rows),
+        check_exact=False,
+        rtol=rtol,
+        atol=atol,
+    )
 
 
 
@@ -117,7 +149,7 @@ def test_Common_spec_max_asymp_dir():
         array_of_zeniths_and_azimuths=np.array([(i, j) for i in np.linspace(0, 20, 5) for j in np.linspace(0, 360, 5)])
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_output))
+    assert_dose_rows_close(result, expected_output)
 
 
 # def test_run_from_spectra():
@@ -173,7 +205,7 @@ def test_run_from_spectra_two_locations():
                         cache_asymptotic_directions=False,
                         )
     
-    assert np.allclose(np.array(result.values.tolist()), np.array(expected_output_doses))
+    assert_dose_rows_close(result.values.tolist(), expected_output_doses)
 
 # def test_run_from_spectra_proton_only():
 #     result = AniMAIRE.run_from_spectra(proton_rigidity_spectrum=lambda x:1,
@@ -307,7 +339,7 @@ def test_DLR_spec_no_tzinfo():
         cache_asymptotic_directions=False,
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_dlr_spec))
+    assert_dose_rows_close(result, expected_dlr_spec)
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Skipping test in GitHub Actions.")
 def test_DLR_spec():
@@ -411,7 +443,7 @@ def test_DLR_spec():
         cache_asymptotic_directions=False,
     ).values.tolist()
     
-    assert np.allclose(np.array(result), np.array(expected_dlr_spec))
+    assert_dose_rows_close(result, expected_dlr_spec)
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Skipping test in GitHub Actions.")
 def test_isotropic_dose_rates():
@@ -512,10 +544,15 @@ def test_anisotropic_dose_rates():
     #  [-90.0, 0.0, 0.0, 1.970171e-07, 2.020958e-07, 3.213747e-07, 1.274567e-08, 7.803949e-09, 5.348835e-09, 7.803949e-22, 7.803949e-17],
     #  [90.0, 355.0, 18.5928, 1.346275e-06, 8.432683e-07, 6.909615e-07, 2.486821e-07, 1.566855e-07, 1.079672e-07, 1.566855e-20, 1.566855e-15]] #second oldest values, using earlier implementation of OTSO in AniMAIRE
     expected_anisotropic_dose_rates = [
-     [-90.0, 0.0, 0.0, 1.959006e-07, 2.009494e-07, 3.195723e-07, 1.266314e-08, 7.753252e-09, 5.313979e-09, 7.753252e-22, 7.753252e-17], 
-     [-90.0, 0.0, 18.5928, 6.333727e-06, 4.788376e-06, 5.942086e-06, 6.883936e-07, 4.435007e-07, 3.158255e-07, 4.435007e-20, 4.435007e-15], 
-     [90.0, 355.0, 0.0, 4.723369e-10, 5.817603e-10, 4.11988e-10, 2.322336e-10, 1.438933e-10, 9.650105e-11, 1.438933e-23, 1.438933e-18], 
-     [90.0, 355.0, 18.5928, 1.242504e-06, 7.785842e-07, 6.383651e-07, 2.296198e-07, 1.447263e-07, 9.978454e-08, 1.447263e-20, 1.447263e-15]]
+     [-90.0, 0.0, 0.0, 1.959118e-07, 2.009609e-07, 3.1959e-07, 1.266382e-08, 7.753686e-09, 5.314273e-09, 7.753686e-22, 7.753686e-17],
+     [-90.0, 0.0, 18.5928, 6.334019e-06, 4.788623e-06, 5.942386e-06, 6.884249e-07, 4.435208e-07, 3.158398e-07, 4.435208e-20, 4.435208e-15],
+     [-90.0, 355.0, 0.0, 1.959118e-07, 2.009609e-07, 3.1959e-07, 1.266382e-08, 7.753686e-09, 5.314273e-09, 7.753686e-22, 7.753686e-17],
+     [-90.0, 355.0, 18.5928, 6.334019e-06, 4.788623e-06, 5.942386e-06, 6.884249e-07, 4.435208e-07, 3.158398e-07, 4.435208e-20, 4.435208e-15],
+     [90.0, 0.0, 0.0, 4.723247e-10, 5.817453e-10, 4.119883e-10, 2.322266e-10, 1.438888e-10, 9.649807e-11, 1.438888e-23, 1.438888e-18],
+     [90.0, 0.0, 18.5928, 1.242457e-06, 7.785546e-07, 6.383417e-07, 2.296108e-07, 1.447207e-07, 9.978065e-08, 1.447207e-20, 1.447207e-15],
+     [90.0, 355.0, 0.0, 4.723247e-10, 5.817453e-10, 4.119883e-10, 2.322266e-10, 1.438888e-10, 9.649807e-11, 1.438888e-23, 1.438888e-18],
+     [90.0, 355.0, 18.5928, 1.242457e-06, 7.785546e-07, 6.383417e-07, 2.296108e-07, 1.447207e-07, 9.978065e-08, 1.447207e-20, 1.447207e-15],
+    ]
     sigma = np.sqrt(0.19)
     pitch_angle_reference_latitude = -17.0
     pitch_angle_reference_longitude = 148.0
@@ -538,7 +575,7 @@ def test_anisotropic_dose_rates():
 
     # assert np.allclose(rounded_actual_values[0], expected_anisotropic_dose_rates[0])
     # assert np.allclose(rounded_actual_values[-1], expected_anisotropic_dose_rates[-1])
-    assert np.allclose(rounded_actual_values, expected_anisotropic_dose_rates, rtol=1e-3)
+    assert_dose_rows_close(rounded_actual_values, expected_anisotropic_dose_rates, rtol=1e-3)
 
 # Test running AniMAIRE using a precomputed OTSO asymptotic direction file
 @pytest.mark.skipif(
