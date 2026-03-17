@@ -14,7 +14,6 @@ from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools
 from .AsymptoticDirectionProcessing import generate_asymp_dir_DF
 from .otso_planet_processing import create_and_convert_full_planet
-import os
 from .spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 # Initialize tqdm for progress bars
 tqdm.pandas()

@@ -226,7 +226,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
     nIncrements_low : int, optional
         Number of rigidity increments for low rigidity range, default 200
     corenum : int, optional
-        Number of CPU cores to use for calculation, default is number of physical cores minus 2
+        Number of CPU cores to use for calculation, default is all physical cores
     **kwargs : dict
         Additional parameters to pass to OTSO.planet()
         
