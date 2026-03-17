@@ -58,6 +58,7 @@ You can use AniMAIRE to produce dose rate data and maps throughout large space w
   - [Using Precomputed Asymptotic Direction Files with `asymp_dir_file` (Optional)](#using-precomputed-asymptotic-direction-files-with-asymp_dir_file-optional)
   - [Example: Forcing Magnetocosmics Running Mode (Linux Only)](#example-forcing-magnetocosmics-running-mode-linux-only)
 - [Running AniMAIRE with Magnetocosmics (Legacy/Alternative Method)](#running-animaire-with-magnetocosmics-legacyalternative-method)
+- [Verbosity Guide](VERBOSITY_GUIDE.md)
 - [Usage](#usage)
 - [Testing that AniMAIRE is working](#testing-that-animaire-is-working)
 - [Calculating dose rates at any location in Earth's atmosphere](#calculating-dose-rates-at-any-location-in-earths-atmosphere)

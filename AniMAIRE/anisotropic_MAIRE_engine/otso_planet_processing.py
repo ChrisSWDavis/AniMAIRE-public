@@ -1,4 +1,6 @@
 #!/bin/python3
+import contextlib
+import io
 import numpy as np
 import pandas as pd
 import datetime as dt
@@ -12,6 +14,14 @@ import psutil
 # Set up caching for OTSO calculations
 OTSOcachedir = 'cachedOTSOData'
 OTSOmemory = Memory(OTSOcachedir, verbose=0)
+
+
+def _run_otso_planet(verbose: bool, **kwargs):
+    """Run OTSO.planet with optional stdout suppression for quiet mode."""
+    if verbose:
+        return OTSO.planet(**kwargs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        return OTSO.planet(**kwargs)
 
 def convert_planet_df_to_asymp_format(planet_df):
     """
@@ -138,7 +148,8 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         if 'externalmag' not in kwargs:
             kwargs['externalmag'] = "TSY89_BOBERG"
             
-        planet_result = OTSO.planet(
+        planet_result = _run_otso_planet(
+            verbose=verbose,
             array_of_lats_and_longs=array_of_lats_and_longs,
             corenum=corenum,
             asymptotic="YES",
