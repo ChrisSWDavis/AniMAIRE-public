@@ -171,6 +171,11 @@ class generalEngineInstance:
             raw_asymp_df = self.get_raw_asymp_DF_from_file(self.asymp_dir_file)
         # # Check if all particle distributions are isotropic with fast mode enabled
         elif all_isotropic and (all_isotropic_fast or self.use_rigidity_predictor_if_isotropic):
+            if self.use_rigidity_predictor_if_isotropic and not all_isotropic_fast:
+                print(
+                    "Warning: using rigidity predictor approximation for isotropic run. "
+                    "This mode is much faster but may differ from full OTSO/Magnetocosmics outputs."
+                )
         #   initialLatitude  initialLongitude  Rigidity      Lat     Long  Filter
             
             cutoff_rigidity_predictions = RigidityPredictor.load().batch_predict(pd.DataFrame( {
