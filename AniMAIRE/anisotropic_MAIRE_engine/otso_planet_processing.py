@@ -95,6 +95,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                             max_rigidity=1010, 
                             min_rigidity=20, 
                             rigidity_step=16, 
+                            verbose: bool = False,
                             **kwargs):
     """
     Create asymptotic directions using OTSO.planet() and convert to a DataFrame format.
@@ -255,6 +256,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                                                       highestMaxRigValue, 
                                                       maxRigValue, 
                                                       high_rigidity_step,
+                                                      verbose=verbose,
                                                       **kwargs)
     
     # Calculate low rigidity range asymptotic directions
@@ -266,6 +268,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                                                      maxRigValue - low_rigidity_step, 
                                                      minRigValue, 
                                                      low_rigidity_step,
+                                                     verbose=verbose,
                                                      **kwargs)
 
     # Combine results from both rigidity ranges
