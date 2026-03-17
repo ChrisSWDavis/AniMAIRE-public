@@ -5,6 +5,7 @@ from tqdm import tqdm
 from joblib import Memory
 import datetime as dt
 from typing import Optional
+import os
 
 #from rigidity_predictor import RigidityPredictor
 from .rigidityPredictor.rigidity_predictor import RigidityPredictor
@@ -172,15 +173,27 @@ class generalEngineInstance:
                 'kp': self.Kp_index,
                 'datetime': self.date_and_time,
             })) # output DF columns: latitude, longitude, kp, datetime, Ru, Rc, Rl
-            
-            # Create expanded dataframe with a row for each lat/lon and rigidity combination
-            raw_asymp_df = pd.DataFrame([
-                {'initialLatitude': row['latitude'], 'initialLongitude': row['longitude'], 
-                 'Rigidity': rig, 'Lat': row['latitude'], 'Long': row['longitude'], 
-                 'Filter': 1 if rig >= row['Rc'] else 0}
-                for rig in default_rigidity_list
-                for _, row in cutoff_rigidity_predictions.iterrows() 
-            ])
+
+            lats = cutoff_rigidity_predictions["latitude"].to_numpy(dtype=float)
+            lons = cutoff_rigidity_predictions["longitude"].to_numpy(dtype=float)
+            rcs = cutoff_rigidity_predictions["Rc"].to_numpy(dtype=float)
+            rigidities = np.array(default_rigidity_list, dtype=float)
+            n_coords = len(cutoff_rigidity_predictions)
+            n_rigidities = len(rigidities)
+
+            expanded_rigidities = np.repeat(rigidities, n_coords)
+            expanded_lats = np.tile(lats, n_rigidities)
+            expanded_lons = np.tile(lons, n_rigidities)
+            expanded_rcs = np.tile(rcs, n_rigidities)
+
+            raw_asymp_df = pd.DataFrame({
+                "initialLatitude": expanded_lats,
+                "initialLongitude": expanded_lons,
+                "Rigidity": expanded_rigidities,
+                "Lat": expanded_lats,
+                "Long": expanded_lons,
+                "Filter": (expanded_rigidities >= expanded_rcs).astype(int),
+            })
 
         else:
             if use_default_9_zeniths_and_azimuths and "array_of_zeniths_and_azimuths" in magneto_kwargs:
@@ -217,15 +230,17 @@ class generalEngineInstance:
                     **magneto_kwargs,
                 )
                 
-        raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
         processed_df = generate_asymp_dir_DF(
             raw_asymp_df,
             self.reference_latitude,
             self.reference_longitude,
             self.date_and_time,
-            cache=False
+            cache=self.cache_magnetocosmics_runs
         )
-        processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
         self.df_of_asymptotic_directions = processed_df
 
     def get_raw_asymp_DF_from_file(self,file_path):

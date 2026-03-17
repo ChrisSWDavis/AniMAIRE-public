@@ -28,45 +28,47 @@ def convert_planet_df_to_asymp_format(planet_df):
         A dataframe with columns: initialLatitude, initialLongitude, Energy, Lat, Long, Filter, Rigidity
         sorted by initialLatitude and initialLongitude
     """
-    import pandas as pd
-    
     # Extract the dataframe from the tuple
     df = planet_df[0]
-    
+
     # Get all columns that contain energy values (asymptotic directions)
-    energy_columns = [col for col in df.columns if '[GeV]' in str(col)]
-    
-    # Create an empty list to store the rows
-    rows = []
-    
-    # Iterate through each row in the dataframe
-    for _, row in df.iterrows():
-        lat = row['Latitude']
-        lon = row['Longitude']
-        
-        # Process each energy column
-        for energy_col in energy_columns:
-            # Extract the energy value from the column name
-            energy_value = float(energy_col.split(' ')[0])
-            
-            # Parse the asymptotic direction string (format: "1;lat;long")
-            asymp_dir = row[energy_col]
-            if isinstance(asymp_dir, str) and ';' in asymp_dir:
-                filter_val, asymp_lat, asymp_long = asymp_dir.split(';')
-                
-                # Create a new row
-                new_row = {
-                    'initialLatitude': lat,
-                    'initialLongitude': lon,
-                    'Energy': energy_value,  # Energy in GeV
-                    'Lat': float(asymp_lat),
-                    'Long': float(asymp_long),
-                    'Filter': int(filter_val)
-                }
-                rows.append(new_row)
-    
-    # Create a dataframe from the rows
-    result_df = pd.DataFrame(rows)
+    energy_columns = [col for col in df.columns if "[GeV]" in str(col)]
+
+    if not energy_columns:
+        return pd.DataFrame(
+            columns=[
+                "initialLatitude",
+                "initialLongitude",
+                "Energy",
+                "Lat",
+                "Long",
+                "Filter",
+                "Rigidity",
+            ]
+        )
+
+    # Vectorized reshape: one row per (coordinate, energy-bin) asymptotic direction.
+    melted = df[["Latitude", "Longitude", *energy_columns]].melt(
+        id_vars=["Latitude", "Longitude"],
+        value_vars=energy_columns,
+        var_name="EnergyColumn",
+        value_name="AsymptoticDirection",
+    )
+
+    valid_rows = melted["AsymptoticDirection"].astype(str).str.contains(";", na=False)
+    melted = melted.loc[valid_rows].copy()
+
+    split_values = melted["AsymptoticDirection"].str.split(";", expand=True)
+    result_df = pd.DataFrame(
+        {
+            "initialLatitude": melted["Latitude"].astype(float).to_numpy(),
+            "initialLongitude": melted["Longitude"].astype(float).to_numpy(),
+            "Energy": melted["EnergyColumn"].astype(str).str.split().str[0].astype(float).to_numpy(),
+            "Lat": split_values[1].astype(float).to_numpy(),
+            "Long": split_values[2].astype(float).to_numpy(),
+            "Filter": split_values[0].astype(int).to_numpy(),
+        }
+    )
     
     # Convert energy (GeV) to rigidity (GV)
     result_df["Rigidity"] = PRCT.convertParticleEnergyToRigidity(
@@ -75,7 +77,19 @@ def convert_planet_df_to_asymp_format(planet_df):
         particleChargeAU=1
     )
     
-    return result_df.sort_values(by=["initialLatitude","initialLongitude"]).reset_index(drop=True)
+    return result_df.sort_values(by=["initialLatitude", "initialLongitude"]).reset_index(drop=True)
+
+
+def _build_rigidity_levels(max_rigidity: float, min_rigidity: float, rigidity_step: float) -> list[float]:
+    """
+    Build a descending rigidity grid including both endpoints where possible.
+    """
+    rigidity_levels_GV = []
+    current_rigidity = max_rigidity
+    while current_rigidity >= min_rigidity:
+        rigidity_levels_GV.append(current_rigidity)
+        current_rigidity -= rigidity_step
+    return rigidity_levels_GV
 
 def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                             kpIndex:int,
@@ -85,6 +99,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                             max_rigidity=1010, 
                             min_rigidity=20, 
                             rigidity_step=16, 
+                            rigidity_levels_GV: Optional[list[float]] = None,
                             **kwargs):
     """
     Create asymptotic directions using OTSO.planet() and convert to a DataFrame format.
@@ -118,11 +133,8 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
     """
     
     # Create rigidity levels for asymptotic directions
-    rigidity_levels_GV = []
-    current_rigidity = max_rigidity
-    while current_rigidity >= min_rigidity:
-        rigidity_levels_GV.append(current_rigidity)
-        current_rigidity -= rigidity_step
+    if rigidity_levels_GV is None:
+        rigidity_levels_GV = _build_rigidity_levels(max_rigidity, min_rigidity, rigidity_step)
 
     # Convert rigidity (GV) to energy (GeV) for OTSO
     energy_levels_GeV = PRCT.convertParticleRigidityToEnergy(rigidity_levels_GV)/1000.0
@@ -181,7 +193,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             minRigValue=0.1,
                             nIncrements_high=60,
                             nIncrements_low=200,
-                            corenum=psutil.cpu_count(logical=False) - 2, 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 1) - 2), 
                             **kwargs):
     """
     Calculate asymptotic directions for a wide range of rigidities by combining high and low rigidity ranges.
@@ -233,27 +245,16 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
     # Use cached or non-cached function based on cache parameter
     create_convert_func = OTSOmemory.cache(create_and_convert_planet) if cache else create_and_convert_planet
     
-    # Calculate high rigidity range asymptotic directions
-    high_rigidity_planet_results = create_convert_func(array_of_lats_and_longs, 
-                                                      KpIndex, 
-                                                      dateAndTime,
-                                                      corenum,
-                                                      array_of_zeniths_and_azimuths, 
-                                                      highestMaxRigValue, 
-                                                      maxRigValue, 
-                                                      high_rigidity_step,
-                                                      **kwargs)
-    
-    # Calculate low rigidity range asymptotic directions
-    low_rigidity_planet_results = create_convert_func(array_of_lats_and_longs, 
-                                                     KpIndex, 
-                                                     dateAndTime,
-                                                     corenum,
-                                                     array_of_zeniths_and_azimuths, 
-                                                     maxRigValue - low_rigidity_step, 
-                                                     minRigValue, 
-                                                     low_rigidity_step,
-                                                     **kwargs)
+    high_rigidity_levels = _build_rigidity_levels(highestMaxRigValue, maxRigValue, high_rigidity_step)
+    low_rigidity_levels = _build_rigidity_levels(maxRigValue - low_rigidity_step, minRigValue, low_rigidity_step)
+    combined_rigidity_levels = high_rigidity_levels + low_rigidity_levels
 
-    # Combine results from both rigidity ranges
-    return pd.concat([high_rigidity_planet_results, low_rigidity_planet_results], ignore_index=True) 
+    return create_convert_func(
+        array_of_lats_and_longs=array_of_lats_and_longs,
+        kpIndex=KpIndex,
+        dateAndTime=dateAndTime,
+        corenum=corenum,
+        array_of_zeniths_and_azimuths=array_of_zeniths_and_azimuths,
+        rigidity_levels_GV=combined_rigidity_levels,
+        **kwargs,
+    )
