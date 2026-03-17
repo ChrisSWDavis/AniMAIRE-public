@@ -175,6 +175,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             dateAndTime:dt.datetime,
                             cache:bool,
                             full_output=False,
+                            verbose: bool = False,
                             array_of_zeniths_and_azimuths=[[0.0,0.0]],
                             highestMaxRigValue=1010,
                             maxRigValue=20,
@@ -224,7 +225,8 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
         Combined DataFrame containing asymptotic directions for both high and low rigidity ranges
     """
     
-    print(f"Using {corenum} cores for OTSO.planet calculation")
+    if verbose:
+        print(f"Using {corenum} cores for OTSO.planet calculation")
     
     # Calculate step sizes for high and low rigidity ranges
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)

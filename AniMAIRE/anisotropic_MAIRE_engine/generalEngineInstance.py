@@ -68,7 +68,8 @@ class generalEngineInstance:
                  array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
                  cache_magnetocosmics_runs: bool = True,
                  generate_NM_count_rates: bool = False,
-                 asymp_dir_file: Optional[str] = None):
+                 asymp_dir_file: Optional[str] = None,
+                 verbose: bool = False):
         """
         Initialize the general engine instance with necessary parameters.
 
@@ -109,6 +110,7 @@ class generalEngineInstance:
         self.cache_magnetocosmics_runs = cache_magnetocosmics_runs
         self.generate_NM_count_rates = generate_NM_count_rates
         self.asymp_dir_file = asymp_dir_file
+        self.verbose = verbose
 
     def getAsymptoticDirsAndRun(self, use_default_9_zeniths_azimuths: bool, record_full_output: bool = False, **mag_cos_kwargs) -> pd.DataFrame:
         """
@@ -133,7 +135,8 @@ class generalEngineInstance:
             singleParticleEngine = singleParticleEngineInstance(incoming_particle_distribution, 
                                                                 self.df_of_asymptotic_directions,
                                                                 self.list_of_altitudes_km,
-                                                                self.generate_NM_count_rates)
+                                                                self.generate_NM_count_rates,
+                                                                verbose=self.verbose)
             
             doseRateDFforParticleSpecies = singleParticleEngine.runOverSpecifiedAltitudes(record_full_output=record_full_output)
             fullDoseRateList.append(doseRateDFforParticleSpecies)
@@ -198,7 +201,7 @@ class generalEngineInstance:
                     [32.0, 180.0],
                     [32.0, 270.0],
                 ]
-                raw_asymp_df = asymptotic_directions_function(
+                call_kwargs = dict(
                     array_of_lats_and_longs=self.array_of_lats_and_longs,
                     KpIndex=self.Kp_index,
                     dateAndTime=self.date_and_time,
@@ -207,8 +210,11 @@ class generalEngineInstance:
                     array_of_zeniths_and_azimuths=default_zeniths_azimuths,
                     **magneto_kwargs,
                 )
+                if self.use_OTSOpy:
+                    call_kwargs["verbose"] = self.verbose
+                raw_asymp_df = asymptotic_directions_function(**call_kwargs)
             else:
-                raw_asymp_df = asymptotic_directions_function(
+                call_kwargs = dict(
                     array_of_lats_and_longs=self.array_of_lats_and_longs,
                     KpIndex=self.Kp_index,
                     dateAndTime=self.date_and_time,
@@ -216,16 +222,22 @@ class generalEngineInstance:
                     full_output=True,
                     **magneto_kwargs,
                 )
+                if self.use_OTSOpy:
+                    call_kwargs["verbose"] = self.verbose
+                raw_asymp_df = asymptotic_directions_function(**call_kwargs)
                 
-        raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
+        if self.verbose:
+            raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
         processed_df = generate_asymp_dir_DF(
             raw_asymp_df,
             self.reference_latitude,
             self.reference_longitude,
             self.date_and_time,
-            cache=False
+            cache=False,
+            verbose=self.verbose,
         )
-        processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
+        if self.verbose:
+            processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
         self.df_of_asymptotic_directions = processed_df
 
     def get_raw_asymp_DF_from_file(self,file_path):
@@ -286,10 +298,12 @@ class generalEngineInstance:
         ]
         
         if all(col in df.columns for col in required_columns_set1):
-            print("Asymptotic directions DataFrame validated successfully with the first format.")
+            if self.verbose:
+                print("Asymptotic directions DataFrame validated successfully with the first format.")
             return df
         elif all(col in df.columns for col in required_columns_set2):
-            print("Asymptotic directions DataFrame validated successfully with the second format.")
+            if self.verbose:
+                print("Asymptotic directions DataFrame validated successfully with the second format.")
             transformed_df = pd.DataFrame({
                 "initialLatitude": df["initialLatitude"],
                 "initialLongitude": df["initialLongitude"],
@@ -298,7 +312,8 @@ class generalEngineInstance:
                 "Long": df["Longitude"],
                 "Filter": df["Filter"]
             })
-            print("Asymptotic directions DataFrame converted from second format to first format with X and Y converted to new latitudes and longitudes.")
+            if self.verbose:
+                print("Asymptotic directions DataFrame converted from second format to first format with X and Y converted to new latitudes and longitudes.")
             return transformed_df
         else:
             raise ValueError("Missing required columns for both formats.")

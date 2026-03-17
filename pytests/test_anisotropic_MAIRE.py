@@ -604,3 +604,34 @@ def test_run_from_OTSO_asymp_file(tmp_path):
     dummy_csv.unlink()
 
 
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS,
+    reason="Skipping optional test. Set the environment variable RUN_OPTIONAL_TESTS to run this test."
+)
+def test_verbose_toggle_controls_console_output(tmp_path, capsys):
+    dummy_csv = tmp_path / "51.5_0.0.csv"
+    dummy_csv.write_text(
+        "Rigidity(GV),Filter,Latitude,Longitude,X,Y,Z\n"
+        "10.0000,1,4.66634,273.283,-0.766392,-9.93945,2.07968\n"
+        "9.99000,1,4.65486,273.308,-0.766085,-9.93790,2.07842"
+    )
+
+    AniMAIRE.run_from_spectra(
+        proton_rigidity_spectrum=lambda x: 1,
+        asymp_dir_file=str(dummy_csv),
+        cache_asymptotic_directions=False,
+        verbose=False,
+    )
+    quiet_output = capsys.readouterr().out
+    assert "Success!" not in quiet_output
+
+    AniMAIRE.run_from_spectra(
+        proton_rigidity_spectrum=lambda x: 1,
+        asymp_dir_file=str(dummy_csv),
+        cache_asymptotic_directions=False,
+        verbose=True,
+    )
+    verbose_output = capsys.readouterr().out
+    assert "Success!" in verbose_output
+
+
