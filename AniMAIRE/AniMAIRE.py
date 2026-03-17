@@ -1,7 +1,9 @@
-import numpy as np
 import datetime as dt
-import spaceweather as sw
-from typing import Callable, List, Optional, Tuple, Union, Any
+import logging
+from typing import Any, Callable, List, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
 
 from .MAIREPLUS_spectrum import MAIREPLUS_spectrum, _set_function_references
 
@@ -10,12 +12,6 @@ from .anisotropic_MAIRE_engine.spectralCalculations.rigiditySpectrum import DLRm
 from .anisotropic_MAIRE_engine.spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution, gaussianBeeckPitchAngleDistribution, isotropicPitchAngleDistribution, gaussianPitchAngleDistribution
 from .anisotropic_MAIRE_engine.generalEngineInstance import generalEngineInstance, default_array_of_lats_and_longs
 from .DoseRateFrame import DoseRateFrame
-import logging
-
-import datetime as dt
-import logging
-import numpy as np
-import pandas as pd
 
 def run_from_spectra(
         proton_rigidity_spectrum: Optional[Callable[[float], float]] = None,
@@ -35,6 +31,7 @@ def run_from_spectra(
         use_OTSOpy: bool = True,
         asymp_dir_file: Optional[str] = None,
         record_full_output: bool = False,
+        verbose: bool = False,
         **mag_cos_kwargs,
 ) -> DoseRateFrame:
     """
@@ -126,11 +123,13 @@ def run_from_spectra(
                                           array_of_lats_and_longs=array_of_lats_and_longs,
                                           cache_magnetocosmics_runs=cache_asymptotic_directions,
                                           generate_NM_count_rates=generate_NM_count_rates,
-                                          asymp_dir_file=asymp_dir_file)
+                                          asymp_dir_file=asymp_dir_file,
+                                          verbose=verbose)
     
     output_dose_rate_DF_data = engine_to_run.getAsymptoticDirsAndRun(use_default_9_zeniths_azimuths, record_full_output=record_full_output,  **mag_cos_kwargs)
 
-    print("Success!")
+    if verbose:
+        print("Success!")
 
     # Capture run parameters excluding potentially large or internal variables
     run_parameters = locals().copy()
@@ -157,6 +156,7 @@ def run_from_power_law_gaussian_distribution(
         Kp_index: Optional[int] = None, date_and_time: Optional[dt.datetime] = None,
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
+        verbose: bool = False,
         **kwargs
 ) -> DoseRateFrame:
     """
@@ -197,6 +197,7 @@ def run_from_power_law_gaussian_distribution(
         proton_pitch_angle_distribution=gaussianPitchAngleDistribution(normFactor=1,sigma=sigma),
         Kp_index=Kp_index,date_and_time=date_and_time,
         asymp_dir_file=asymp_dir_file,
+        verbose=verbose,
         **kwargs,
     )
 
@@ -207,6 +208,7 @@ def run_from_double_power_law_gaussian_distribution(
         Kp_index: Optional[int] = None, date_and_time: Optional[dt.datetime] = None,
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
+        verbose: bool = False,
         **kwargs
 ) -> DoseRateFrame:
     """
@@ -253,6 +255,7 @@ def run_from_double_power_law_gaussian_distribution(
         proton_pitch_angle_distribution=gaussianPitchAngleDistribution(normFactor=1,sigma=sigma_1) + (B * gaussianPitchAngleDistribution(normFactor=1,sigma=sigma_2,alpha=alpha_prime)),
         Kp_index=Kp_index,date_and_time=date_and_time,
         asymp_dir_file=asymp_dir_file,
+        verbose=verbose,
         **kwargs,
     )
 
@@ -262,6 +265,7 @@ def run_from_power_law_Beeck_gaussian_distribution(
         Kp_index: Optional[int] = None, date_and_time: Optional[dt.datetime] = None,
         use_split_spectrum: bool = False,
         asymp_dir_file: Optional[str] = None,
+        verbose: bool = False,
         **kwargs
 ) -> DoseRateFrame:
     """
@@ -304,6 +308,7 @@ def run_from_power_law_Beeck_gaussian_distribution(
         proton_pitch_angle_distribution=gaussianBeeckPitchAngleDistribution(normFactor=1,A=A,B=B),
         Kp_index=Kp_index,date_and_time=date_and_time,
         asymp_dir_file=asymp_dir_file,
+        verbose=verbose,
         **kwargs,
     )
 
@@ -313,6 +318,7 @@ def run_from_DLR_cosmic_ray_model(
         Kp_index: Optional[int] = None,
         date_and_time: Optional[dt.datetime] = None,
         asymp_dir_file: Optional[str] = None,
+        verbose: bool = False,
         **kwargs
 ) -> DoseRateFrame:
     """
@@ -335,7 +341,8 @@ def run_from_DLR_cosmic_ray_model(
         DataFrame containing the calculated dose rates.
     """
     if (W_parameter is None) and (OULU_count_rate_in_seconds is None):
-        print("As no OULU count rates or W parameters were specified, the count rate of OULU in the past will be determined using the supplied date and time for the purposes of calculating the incoming spectra.")
+        if verbose:
+            print("As no OULU count rates or W parameters were specified, the count rate of OULU in the past will be determined using the supplied date and time for the purposes of calculating the incoming spectra.")
         DLR_model_date_and_time = date_and_time
     else:
         DLR_model_date_and_time = None
@@ -345,6 +352,7 @@ def run_from_DLR_cosmic_ray_model(
         alpha_rigidity_spectrum=DLRmodelSpectrum(atomicNumber=2, date_and_time=DLR_model_date_and_time, OULUcountRateInSeconds=OULU_count_rate_in_seconds, W_parameter=W_parameter),
         Kp_index=Kp_index,date_and_time=date_and_time,
         asymp_dir_file=asymp_dir_file,
+        verbose=verbose,
         **kwargs,
     )
 
@@ -362,6 +370,7 @@ def run_maireplus_spectrum(
     neutron_monitor_2_location: Tuple[float, float, float] = (50.0, 5.0, 0.0),
     normalisation_monitor_location: Tuple[float, float, float] = (65.0, 25.0, 0.0),
     use_fast_calculation: bool = True,
+    verbose: bool = False,
     **kwargs: Any
 ) -> DoseRateFrame:
     """
@@ -432,6 +441,7 @@ def run_maireplus_spectrum(
         Kp_index=kp_index,
         proton_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
         alpha_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
+        verbose=verbose,
         **kwargs
     )
     
@@ -441,6 +451,7 @@ def run_maireplus_spectrum(
         proton_pitch_angle_distribution=IsotropicPitchAngleDistribution(use_fast_calculation=use_fast_calculation),
         date_and_time=datetime,
         Kp_index=kp_index,
+        verbose=verbose,
         #array_of_lats_and_longs=array_of_lats_and_longs,
         **kwargs
     )

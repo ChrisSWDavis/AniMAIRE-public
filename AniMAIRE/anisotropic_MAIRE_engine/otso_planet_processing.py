@@ -1,4 +1,6 @@
 #!/bin/python3
+import contextlib
+import io
 import numpy as np
 import pandas as pd
 import datetime as dt
@@ -12,6 +14,14 @@ import psutil
 # Set up caching for OTSO calculations
 OTSOcachedir = 'cachedOTSOData'
 OTSOmemory = Memory(OTSOcachedir, verbose=0)
+
+
+def _run_otso_planet(verbose: bool, **kwargs):
+    """Run OTSO.planet with optional stdout suppression for quiet mode."""
+    if verbose:
+        return OTSO.planet(**kwargs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        return OTSO.planet(**kwargs)
 
 def convert_planet_df_to_asymp_format(planet_df):
     """
@@ -85,6 +95,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
                             max_rigidity=1010, 
                             min_rigidity=20, 
                             rigidity_step=16, 
+                            verbose: bool = False,
                             **kwargs):
     """
     Create asymptotic directions using OTSO.planet() and convert to a DataFrame format.
@@ -136,22 +147,35 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         # Calculate asymptotic directions using OTSO.planet
         # Set default externalmag if not provided in kwargs
         if 'externalmag' not in kwargs:
-            kwargs['externalmag'] = "TSY89_BOBERG"
+            kwargs['externalmag'] = "TSY89c"
+
+        if 'boberg' not in kwargs:
+            kwargs['boberg'] = True
+            kwargs['bobergtype'] = "EXTENSION"
+
+        extern=kwargs['externalmag']
+        boberg=kwargs['boberg']
+        bobergtype=kwargs['bobergtype']
+
+        kwargs.pop('externalmag', None)
+        kwargs.pop('boberg', None)
+        kwargs.pop('bobergtype', None)
             
-        planet_result = OTSO.planet(
-            array_of_lats_and_longs=array_of_lats_and_longs,
-            corenum=corenum,
-            asymptotic="YES",
-            asymlevels=energy_levels_GeV,
-            kp=kpIndex,
-            year=dateAndTime.year,
-            month=dateAndTime.month,
-            day=dateAndTime.day,
-            hour=dateAndTime.hour,
-            minute=dateAndTime.minute,
-            second=dateAndTime.second,
-            zenith=zenith,
-            azimuth=azimuth,
+        planet_result = _run_otso_planet(
+            verbose=verbose,
+            grid_params={"array_of_lats_and_longs": array_of_lats_and_longs},
+            computation_params={"corenum": corenum},
+            asymptotic_params={"asymptotic": "YES", "asymlevels": energy_levels_GeV},
+            magfield_params={"model": extern, "boberg": boberg, "bobergtype": bobergtype},
+            geomagnetic={"kp": kpIndex},
+            datetime_params={"year": dateAndTime.year, 
+                             "month": dateAndTime.month, 
+                             "day": dateAndTime.day, 
+                             "hour": dateAndTime.hour, 
+                             "minute": dateAndTime.minute, 
+                             "second": dateAndTime.second},
+            particle_params={"zenith": zenith, "azimuth": azimuth},
+            integration_params={"gyropercent": 15, "betaerror": 0.01},
             **kwargs
         )
         
@@ -175,6 +199,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             dateAndTime:dt.datetime,
                             cache:bool,
                             full_output=False,
+                            verbose: bool = False,
                             array_of_zeniths_and_azimuths=[[0.0,0.0]],
                             highestMaxRigValue=1010,
                             maxRigValue=20,
@@ -224,7 +249,8 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
         Combined DataFrame containing asymptotic directions for both high and low rigidity ranges
     """
     
-    print(f"Using {corenum} cores for OTSO.planet calculation")
+    if verbose:
+        print(f"Using {corenum} cores for OTSO.planet calculation")
     
     # Calculate step sizes for high and low rigidity ranges
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)
@@ -242,6 +268,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                                                       highestMaxRigValue, 
                                                       maxRigValue, 
                                                       high_rigidity_step,
+                                                      verbose=verbose,
                                                       **kwargs)
     
     # Calculate low rigidity range asymptotic directions
@@ -253,6 +280,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                                                      maxRigValue - low_rigidity_step, 
                                                      minRigValue, 
                                                      low_rigidity_step,
+                                                     verbose=verbose,
                                                      **kwargs)
 
     # Combine results from both rigidity ranges

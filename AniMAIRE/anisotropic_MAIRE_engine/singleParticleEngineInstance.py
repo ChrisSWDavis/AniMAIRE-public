@@ -23,7 +23,8 @@ class singleParticleEngineInstance:
                  particle_distribution: particleDistribution, 
                  dfofAsymptoticDirections: pd.DataFrame, 
                  list_of_altitudes_in_km: list[float],
-                 generate_NM_count_rates: bool):
+                 generate_NM_count_rates: bool,
+                 verbose: bool = False):
         """
         Initialize the instance with necessary parameters.
         """
@@ -31,6 +32,7 @@ class singleParticleEngineInstance:
         self.list_of_altitudes_in_km = list_of_altitudes_in_km
         self.dfOfAllAsymptoticDirections = dfofAsymptoticDirections
         self.generate_NM_count_rates = generate_NM_count_rates
+        self.verbose = verbose
         self.rigiditySpectrumParamDict = {}
         self.pitchAngleDistributionParamDict = {}
 
@@ -38,11 +40,13 @@ class singleParticleEngineInstance:
         """
         Get the pitch angle distribution.
         """
-        print("Acquiring pitch angle distributions...")
+        if self.verbose:
+            print("Acquiring pitch angle distributions...")
         pitchAngleDistToUse = self.particle_distribution.momentum_distribution.pitch_angle_distribution
         try:
-            print("IMF latitude set to", self.IMFlatitude)
-            print("IMF longitude set to", self.IMFlongitude)
+            if self.verbose:
+                print("IMF latitude set to", self.IMFlatitude)
+                print("IMF longitude set to", self.IMFlongitude)
         except AttributeError:
             self.IMFlatitude = -1000.0 # distribution is probably isotropic: while a better solution is probably necessary, set to dummy variables for now.
             self.IMFlongitude = -1000.0
@@ -65,20 +69,29 @@ class singleParticleEngineInstance:
         """
         Run calculations over specified altitudes.
         """
-        print("Assigning pitch angle weighting factors...")
-        df_with_weighting_factors_full_angles = acquireWeightingFactors(self.dfOfAllAsymptoticDirections, self.particle_distribution)
-        df_with_weighting_factors_full_angles.to_pickle("df_with_weighting_factors_full_angles.pkl")
+        if self.verbose:
+            print("Assigning pitch angle weighting factors...")
+        df_with_weighting_factors_full_angles = acquireWeightingFactors(
+            self.dfOfAllAsymptoticDirections,
+            self.particle_distribution,
+            verbose=self.verbose,
+        )
+        if self.verbose:
+            df_with_weighting_factors_full_angles.to_pickle("df_with_weighting_factors_full_angles.pkl")
 
         df_with_weighting_factors = get_mean_weighting_factors_for_multi_angle_magcos_runs(df_with_weighting_factors_full_angles)
 
-        print("Converting spectra and asymptotic directions to particle fluxes and dose rates...")
+        if self.verbose:
+            print("Converting spectra and asymptotic directions to particle fluxes and dose rates...")
         sortedOutputDoseRates = self.calc_output_dose_flux(df_with_weighting_factors, self.list_of_altitudes_in_km, self.particle_distribution.particle_species.particleName)
         
-        df_with_weighting_factors.to_pickle("weighting_factor_DF.pkl")
+        if self.verbose:
+            df_with_weighting_factors.to_pickle("weighting_factor_DF.pkl")
         if record_full_output:  
             sortedOutputDoseRates.attrs['weighting_factor_input_DF'] = dd.from_pandas(df_with_weighting_factors)
         
-        print("Output dose rates calculated successfully!")
+        if self.verbose:
+            print("Output dose rates calculated successfully!")
         return sortedOutputDoseRates
 
     def calc_output_dose_flux(self, asymp_dir_DF_with_weighting_factors: pd.DataFrame, list_of_altitudes_in_km: list[float], particle_name: str) -> pd.DataFrame:
@@ -91,7 +104,7 @@ class singleParticleEngineInstance:
                                                                         fill_value=0.0)
 
         DFofSpectraForEachCoord = asymp_dir_DF_with_weighting_factors.groupby(["initialLatitude","initialLongitude"]).apply(spectrum_to_function_conversion_function)
-        outputDoseRatesForAltitudeRange = get_apply_method(DFofSpectraForEachCoord)(lambda spectrum: DAFcalc.calculate_from_rigidity_spec(
+        outputDoseRatesForAltitudeRange = get_apply_method(DFofSpectraForEachCoord, verbose=self.verbose)(lambda spectrum: DAFcalc.calculate_from_rigidity_spec(
                                                                                                 inputRigidityDistributionFunctionGV=lambda x: float(spectrum(x)),
                                                                                                 altitudesInkm=list_of_altitudes_in_km,
                                                                                                 particleName=particle_name))
@@ -99,9 +112,11 @@ class singleParticleEngineInstance:
         outputDoseRatesOnlyDF = pd.concat(outputDoseRatesForAltitudeRange.tolist(), ignore_index=True)
 
         if self.generate_NM_count_rates:
-            print("Calculating neutron monitor count rates...")
+            if self.verbose:
+                print("Calculating neutron monitor count rates...")
             outputDoseRatesOnlyDF["NM64_cr_unnorm"] = self.get_neutron_monitor_count_rates(list_of_altitudes_in_km, particle_name, DFofSpectraForEachCoord)
-            print("Neutron monitor count rates successfully determined.")
+            if self.verbose:
+                print("Neutron monitor count rates successfully determined.")
 
         outputDoseRatesOnlyDF_with_lats_and_longs = self.reinsert_original_lats_and_longs(outputDoseRatesOnlyDF, outputDoseRatesForAltitudeRange)
         sortedOutputDoseRates = outputDoseRatesOnlyDF_with_lats_and_longs.sort_values(["latitude", "longitude", "altitude (km)"], ignore_index=True)
@@ -114,7 +129,9 @@ class singleParticleEngineInstance:
         NM64_values_list = []
 
         for altitude_in_km in list_of_altitudes_in_km:
-            NM64_vals_DF = get_apply_method(DFofSpectraForEachCoord)(lambda x: self.calculate_unnormed_NM64_cr(x, particle_name=particle_name, altitude_in_km=altitude_in_km)).values
+            NM64_vals_DF = get_apply_method(DFofSpectraForEachCoord, verbose=self.verbose)(
+                lambda x: self.calculate_unnormed_NM64_cr(x, particle_name=particle_name, altitude_in_km=altitude_in_km)
+            ).values
             NM64_values_list.append(NM64_vals_DF)
 
         new_cr_unnorm_list = np.array(NM64_values_list).T.flatten()
