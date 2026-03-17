@@ -5,6 +5,7 @@ from tqdm import tqdm
 from joblib import Memory
 import datetime as dt
 from typing import Optional
+import os
 
 #from rigidity_predictor import RigidityPredictor
 from .rigidityPredictor.rigidity_predictor import RigidityPredictor
@@ -13,7 +14,6 @@ from .singleParticleEngineInstance import singleParticleEngineInstance
 from AsympDirsCalculator import AsympDirsTools
 from .AsymptoticDirectionProcessing import generate_asymp_dir_DF
 from .otso_planet_processing import create_and_convert_full_planet
-import os
 from .spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 # Initialize tqdm for progress bars
 tqdm.pandas()
@@ -67,6 +67,7 @@ class generalEngineInstance:
                  reference_longitude: float = 45.0,
                  array_of_lats_and_longs: np.ndarray = default_array_of_lats_and_longs,
                  cache_magnetocosmics_runs: bool = True,
+                 use_rigidity_predictor_if_isotropic: bool = False,
                  generate_NM_count_rates: bool = False,
                  asymp_dir_file: Optional[str] = None):
         """
@@ -107,6 +108,7 @@ class generalEngineInstance:
         self.array_of_lats_and_longs = array_of_lats_and_longs
 
         self.cache_magnetocosmics_runs = cache_magnetocosmics_runs
+        self.use_rigidity_predictor_if_isotropic = use_rigidity_predictor_if_isotropic
         self.generate_NM_count_rates = generate_NM_count_rates
         self.asymp_dir_file = asymp_dir_file
 
@@ -159,11 +161,21 @@ class generalEngineInstance:
         else:
             asymptotic_directions_function = AsympDirsTools.get_magcos_asymp_dirs
         list_of_pads = [dist.momentum_distribution.pitch_angle_distribution for dist in self.list_of_particle_distributions]
+        all_isotropic = all(isinstance(dist, IsotropicPitchAngleDistribution) for dist in list_of_pads)
+        all_isotropic_fast = all(
+            isinstance(dist, IsotropicPitchAngleDistribution) and dist.use_fast_calculation
+            for dist in list_of_pads
+        )
 
         if self.asymp_dir_file:
             raw_asymp_df = self.get_raw_asymp_DF_from_file(self.asymp_dir_file)
         # # Check if all particle distributions are isotropic with fast mode enabled
-        elif all(isinstance(dist, IsotropicPitchAngleDistribution) and dist.use_fast_calculation for dist in list_of_pads):
+        elif all_isotropic and (all_isotropic_fast or self.use_rigidity_predictor_if_isotropic):
+            if self.use_rigidity_predictor_if_isotropic and not all_isotropic_fast:
+                print(
+                    "Warning: using rigidity predictor approximation for isotropic run. "
+                    "This mode is much faster but may differ from full OTSO/Magnetocosmics outputs."
+                )
         #   initialLatitude  initialLongitude  Rigidity      Lat     Long  Filter
             
             cutoff_rigidity_predictions = RigidityPredictor.load().batch_predict(pd.DataFrame( {
@@ -172,15 +184,27 @@ class generalEngineInstance:
                 'kp': self.Kp_index,
                 'datetime': self.date_and_time,
             })) # output DF columns: latitude, longitude, kp, datetime, Ru, Rc, Rl
-            
-            # Create expanded dataframe with a row for each lat/lon and rigidity combination
-            raw_asymp_df = pd.DataFrame([
-                {'initialLatitude': row['latitude'], 'initialLongitude': row['longitude'], 
-                 'Rigidity': rig, 'Lat': row['latitude'], 'Long': row['longitude'], 
-                 'Filter': 1 if rig >= row['Rc'] else 0}
-                for rig in default_rigidity_list
-                for _, row in cutoff_rigidity_predictions.iterrows() 
-            ])
+
+            lats = cutoff_rigidity_predictions["latitude"].to_numpy(dtype=float)
+            lons = cutoff_rigidity_predictions["longitude"].to_numpy(dtype=float)
+            rcs = cutoff_rigidity_predictions["Rc"].to_numpy(dtype=float)
+            rigidities = np.array(default_rigidity_list, dtype=float)
+            n_coords = len(cutoff_rigidity_predictions)
+            n_rigidities = len(rigidities)
+
+            expanded_rigidities = np.repeat(rigidities, n_coords)
+            expanded_lats = np.tile(lats, n_rigidities)
+            expanded_lons = np.tile(lons, n_rigidities)
+            expanded_rcs = np.tile(rcs, n_rigidities)
+
+            raw_asymp_df = pd.DataFrame({
+                "initialLatitude": expanded_lats,
+                "initialLongitude": expanded_lons,
+                "Rigidity": expanded_rigidities,
+                "Lat": expanded_lats,
+                "Long": expanded_lons,
+                "Filter": (expanded_rigidities >= expanded_rcs).astype(int),
+            })
 
         else:
             if use_default_9_zeniths_and_azimuths and "array_of_zeniths_and_azimuths" in magneto_kwargs:
@@ -217,15 +241,22 @@ class generalEngineInstance:
                     **magneto_kwargs,
                 )
                 
-        raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
-        processed_df = generate_asymp_dir_DF(
-            raw_asymp_df,
-            self.reference_latitude,
-            self.reference_longitude,
-            self.date_and_time,
-            cache=False
-        )
-        processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            raw_asymp_df.to_pickle("raw_asymp_dir_DF.pkl")
+        if all_isotropic:
+            # Isotropic distributions are independent of pitch angle, so skip expensive angle generation.
+            processed_df = raw_asymp_df.copy()
+            processed_df["angleBetweenIMFinRadians"] = 0.0
+        else:
+            processed_df = generate_asymp_dir_DF(
+                raw_asymp_df,
+                self.reference_latitude,
+                self.reference_longitude,
+                self.date_and_time,
+                cache=self.cache_magnetocosmics_runs
+            )
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            processed_df.to_csv("self_df_of_asymptotic_directions.csv", index=False)
         self.df_of_asymptotic_directions = processed_df
 
     def get_raw_asymp_DF_from_file(self,file_path):

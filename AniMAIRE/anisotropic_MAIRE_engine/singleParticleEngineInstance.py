@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import os
 
 from atmosphericRadiationDoseAndFlux import doseAndFluxCalculator as DAFcalc
 from scipy.interpolate import interp1d
@@ -67,14 +68,16 @@ class singleParticleEngineInstance:
         """
         print("Assigning pitch angle weighting factors...")
         df_with_weighting_factors_full_angles = acquireWeightingFactors(self.dfOfAllAsymptoticDirections, self.particle_distribution)
-        df_with_weighting_factors_full_angles.to_pickle("df_with_weighting_factors_full_angles.pkl")
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            df_with_weighting_factors_full_angles.to_pickle("df_with_weighting_factors_full_angles.pkl")
 
         df_with_weighting_factors = get_mean_weighting_factors_for_multi_angle_magcos_runs(df_with_weighting_factors_full_angles)
 
         print("Converting spectra and asymptotic directions to particle fluxes and dose rates...")
         sortedOutputDoseRates = self.calc_output_dose_flux(df_with_weighting_factors, self.list_of_altitudes_in_km, self.particle_distribution.particle_species.particleName)
         
-        df_with_weighting_factors.to_pickle("weighting_factor_DF.pkl")
+        if os.environ.get("ANIMAIRE_DEBUG_DUMP_INTERMEDIATES") == "1":
+            df_with_weighting_factors.to_pickle("weighting_factor_DF.pkl")
         if record_full_output:  
             sortedOutputDoseRates.attrs['weighting_factor_input_DF'] = dd.from_pandas(df_with_weighting_factors)
         
@@ -90,7 +93,7 @@ class singleParticleEngineInstance:
                                                                         bounds_error=False,
                                                                         fill_value=0.0)
 
-        DFofSpectraForEachCoord = asymp_dir_DF_with_weighting_factors.groupby(["initialLatitude","initialLongitude"]).apply(spectrum_to_function_conversion_function)
+        DFofSpectraForEachCoord = asymp_dir_DF_with_weighting_factors.groupby(["initialLatitude","initialLongitude"], sort=False).apply(spectrum_to_function_conversion_function)
         outputDoseRatesForAltitudeRange = get_apply_method(DFofSpectraForEachCoord)(lambda spectrum: DAFcalc.calculate_from_rigidity_spec(
                                                                                                 inputRigidityDistributionFunctionGV=lambda x: float(spectrum(x)),
                                                                                                 altitudesInkm=list_of_altitudes_in_km,
@@ -153,17 +156,26 @@ class singleParticleEngineInstance:
         """
         Reinsert original latitudes and longitudes into the dataframe.
         """
-        original_lats = original_data_frame.reset_index(level=[0, 1])["initialLatitude"]
-        original_longs = original_data_frame.reset_index(level=[0, 1])["initialLongitude"]
+        original_coords = original_data_frame.reset_index(level=[0, 1])[["initialLatitude", "initialLongitude"]].reset_index(drop=True)
+        n_coords = len(original_coords)
+        n_altitudes = len(new_doserates_DF["altitude (km)"].unique())
 
-        list_of_altitude_dfs = []
-        for altitude_in_km in new_doserates_DF["altitude (km)"].unique():
-            df_for_specific_altitude = new_doserates_DF[new_doserates_DF["altitude (km)"] == altitude_in_km].reset_index(drop=True).copy()
-            df_for_specific_altitude["latitude"] = original_lats
-            df_for_specific_altitude["longitude"] = original_longs
-            list_of_altitude_dfs.append(df_for_specific_altitude)
+        combined_df = new_doserates_DF.copy()
+        if n_coords > 0 and (n_coords * n_altitudes == len(combined_df)):
+            combined_df["latitude"] = np.repeat(original_coords["initialLatitude"].to_numpy(), n_altitudes)
+            combined_df["longitude"] = np.repeat(original_coords["initialLongitude"].to_numpy(), n_altitudes)
+        else:
+            # Fallback to robust (but slower) alignment if shape assumptions are violated.
+            original_lats = original_coords["initialLatitude"]
+            original_longs = original_coords["initialLongitude"]
+            list_of_altitude_dfs = []
+            for altitude_in_km in combined_df["altitude (km)"].unique():
+                df_for_specific_altitude = combined_df[combined_df["altitude (km)"] == altitude_in_km].reset_index(drop=True).copy()
+                df_for_specific_altitude["latitude"] = original_lats
+                df_for_specific_altitude["longitude"] = original_longs
+                list_of_altitude_dfs.append(df_for_specific_altitude)
+            combined_df = pd.concat(list_of_altitude_dfs, ignore_index=True)
 
-        combined_df = pd.concat(list_of_altitude_dfs, ignore_index=True)
         # Reorder columns to place latitude and longitude on the left-hand side
         columns_order = ["latitude", "longitude"] + [col for col in combined_df.columns if col not in ["latitude", "longitude"]]
         return combined_df[columns_order]

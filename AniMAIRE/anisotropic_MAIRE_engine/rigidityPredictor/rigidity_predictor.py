@@ -268,7 +268,14 @@ class RigidityPredictor:
             raise FileNotFoundError(f"Model file not found: {filepath}")
             
         # Load the saved dictionary
-        save_dict = joblib.load(filepath)
+        try:
+            save_dict = joblib.load(filepath)
+        except ModuleNotFoundError as error:
+            raise ModuleNotFoundError(
+                "Rigidity predictor dependencies are missing. "
+                "Install optional ML dependencies (e.g. scikit-learn/xgboost) "
+                "to use use_rigidity_predictor_if_isotropic=True."
+            ) from error
         
         # Load XGBoost model using native format if available
         if 'model_path' in save_dict:

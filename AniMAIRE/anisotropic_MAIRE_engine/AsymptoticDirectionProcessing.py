@@ -19,6 +19,7 @@ from .spectralCalculations.momentaDistribution import momentaDistribution
 from .spectralCalculations.pitchAngleDistribution import IsotropicPitchAngleDistribution
 
 memory_asymp_dirs = Memory("./cacheAsymptoticDirectionOutputs", verbose=0)
+_PANDARALLEL_INITIALIZED = False
 
 m0 = 1.67262192e-27 #kg
 c = 299792458.0 #m/s
@@ -26,6 +27,17 @@ protonCharge = 1.60217663e-19 #C
 protonRestEnergy = m0 * (c**2)
 
 global get_apply_method
+def _ensure_pandarallel_initialized() -> None:
+    global _PANDARALLEL_INITIALIZED
+    if _PANDARALLEL_INITIALIZED:
+        return
+    try:
+        from pandarallel import pandarallel
+        pandarallel.initialize(progress_bar=False)
+        _PANDARALLEL_INITIALIZED = True
+    except Exception:
+        _PANDARALLEL_INITIALIZED = False
+
 def get_apply_method(DF_or_Series: pd.DataFrame) -> callable:
     """
     Determine the appropriate apply method based on the debugging state.
@@ -40,10 +52,11 @@ def get_apply_method(DF_or_Series: pd.DataFrame) -> callable:
     """
     if hasattr(sys, 'gettrace') and sys.gettrace() is not None:
         print("debug mode being used: setting AniMAIRE to use progress_apply rather than running in parallel!")
-        apply_method = DF_or_Series.progress_apply
+        apply_method = DF_or_Series.progress_apply if hasattr(DF_or_Series, "progress_apply") else DF_or_Series.apply
     else:
-        #print("not in debug mode: setting AniMAIRE to use parallel_apply!")
-        apply_method = DF_or_Series.parallel_apply
+        _ensure_pandarallel_initialized()
+        # Fall back to normal apply when pandarallel is not initialized.
+        apply_method = DF_or_Series.parallel_apply if hasattr(DF_or_Series, "parallel_apply") else DF_or_Series.apply
         
     return apply_method
 
@@ -103,11 +116,24 @@ def convertAsymptoticDirectionsToPitchAngle(dataframeToFillFrom: pd.DataFrame, I
         The Series with pitch angles.
     """
     print("acquiring pitch angles...")
-    from pandarallel import pandarallel
-    pandarallel.initialize(progress_bar=True)
-    pitch_angle_list = get_apply_method(dataframeToFillFrom)(lambda dataframe_row: get_pitch_angle_for_DF_analytic(IMFlatitude, IMFlongitude, dataframe_row["Lat"], dataframe_row["Long"]), axis=1)
+    asymptotic_lats = dataframeToFillFrom["Lat"].to_numpy(dtype=float)
+    asymptotic_longs = dataframeToFillFrom["Long"].to_numpy(dtype=float)
 
-    return pitch_angle_list
+    IMFlatitude_rad = np.deg2rad(IMFlatitude)
+    IMFlongitude_rad = np.deg2rad(IMFlongitude)
+    asymptotic_lats_rad = np.deg2rad(asymptotic_lats)
+    asymptotic_longs_rad = np.deg2rad(asymptotic_longs)
+
+    cos_pitch_angle = (
+        np.sin(asymptotic_lats_rad) * np.sin(IMFlatitude_rad)
+        + np.cos(asymptotic_lats_rad)
+        * np.cos(IMFlatitude_rad)
+        * np.cos(asymptotic_longs_rad - IMFlongitude_rad)
+    )
+    cos_pitch_angle = np.clip(cos_pitch_angle, -1.0, 1.0)
+    pitch_angles = np.arccos(cos_pitch_angle)
+
+    return pd.Series(pitch_angles, index=dataframeToFillFrom.index)
 
 @numba.jit(nopython=True)
 def get_pitch_angle_for_DF_analytic(IMFlatitude: float, IMFlongitude: float, asymptotic_dir_latitude: float, asymptotic_dir_longitude: float) -> float:
@@ -154,18 +180,22 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
     - pd.DataFrame
         The DataFrame with weighting factors.
     """
-
-    from pandarallel import pandarallel
-    pandarallel.initialize(progress_bar=True)
-    
     momentaDist = particle_dist.momentum_distribution
     new_asymptotic_direction_DF = asymptotic_direction_DF.copy()
+    new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
 
-    # Check if we have an isotropic pitch angle distribution with fast mode
-    is_isotropic_fast = (isinstance(momentaDist.getPitchAngleDistribution(), IsotropicPitchAngleDistribution) and 
-                        getattr(momentaDist.getPitchAngleDistribution(), 'use_fast_calculation', False))
+    # For isotropic PADs, pitch-angle weighting is exactly 1 regardless of angle and rigidity.
+    is_isotropic = isinstance(momentaDist.getPitchAngleDistribution(), IsotropicPitchAngleDistribution)
 
-    if not is_isotropic_fast:
+    print("calculating rigidity weighting factors...")
+    rigidity_spectrum = momentaDist.getRigiditySpectrum()
+    unique_rigidities = new_asymptotic_direction_DF["Rigidity"].drop_duplicates()
+    rigidity_factor_by_rigidity = {
+        rigidity: rigidity_spectrum(rigidity) for rigidity in unique_rigidities.to_numpy(dtype=float)
+    }
+    new_asymptotic_direction_DF["RigidityWeightingFactor"] = new_asymptotic_direction_DF["Rigidity"].map(rigidity_factor_by_rigidity)
+
+    if not is_isotropic:
         # find weighting factors from the angles and rigidities
         def pitchAngleFunctionToUse(row):
             """
@@ -178,41 +208,23 @@ def acquireWeightingFactors(asymptotic_direction_DF: pd.DataFrame, particle_dist
                 The pitch angle distribution value
             """
             return momentaDist.getPitchAngleDistribution()(row["angleBetweenIMFinRadians"], row["Rigidity"])
-        
-        def fullRigidityPitchWeightingFactorFunctionToUse(row):
-            """
-            Calculate the combined rigidity and pitch angle weighting factor for a given row.
-            
-            Args:
-                row: DataFrame row containing angleBetweenIMFinRadians and Rigidity
-                
-            Returns:
-                The combined rigidity and pitch angle weighting factor
-            """
-            return momentaDist(row["angleBetweenIMFinRadians"], row["Rigidity"])
 
         print("calculating pitch angle weighting factors...")
         new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF)(pitchAngleFunctionToUse, axis=1)
-
-        new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
-
-        print("calculating rigidity weighting factors...")
-        new_asymptotic_direction_DF["RigidityWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF["Rigidity"])(momentaDist.getRigiditySpectrum())
-
         print("calculating rigidity + pitch combined weighting factors...")
-        all_weighted_asymp_dirs = get_apply_method(new_asymptotic_direction_DF)(fullRigidityPitchWeightingFactorFunctionToUse, axis=1)
-        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = all_weighted_asymp_dirs * (new_asymptotic_direction_DF["Filter"] == 1)
+        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = (
+            new_asymptotic_direction_DF["PitchAngleWeightingFactor"]
+            * new_asymptotic_direction_DF["RigidityWeightingFactor"]
+            * new_asymptotic_direction_DF["Filter"]
+        )
     else:
-        # For isotropic fast mode, set pitch angle factor to 1 and full rigidity pitch factor to rigidity factor
-        print("using isotropic fast mode: setting pitch angle weighting factors to 1")
+        # For isotropic mode, set pitch angle factor to 1 and full rigidity pitch factor to rigidity factor.
+        print("using isotropic mode: setting pitch angle weighting factors to 1")
         new_asymptotic_direction_DF["PitchAngleWeightingFactor"] = 1.0
-        new_asymptotic_direction_DF["Filter"] = (new_asymptotic_direction_DF["Filter"] == 1) * 1
-        
-        print("calculating rigidity weighting factors...")
-        new_asymptotic_direction_DF["RigidityWeightingFactor"] = get_apply_method(new_asymptotic_direction_DF["Rigidity"])(momentaDist.getRigiditySpectrum())
-        
         print("setting full rigidity pitch weighting factors equal to rigidity weighting factors...")
-        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = new_asymptotic_direction_DF["RigidityWeightingFactor"] * (new_asymptotic_direction_DF["Filter"] == 1)
+        new_asymptotic_direction_DF["fullRigidityPitchWeightingFactor"] = (
+            new_asymptotic_direction_DF["RigidityWeightingFactor"] * new_asymptotic_direction_DF["Filter"]
+        )
     
     print("calculating energy + pitch combined weighting factors...")
     print("converting rigidities to energies...")
