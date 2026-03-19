@@ -36,7 +36,7 @@ A Python toolkit for calculating dose rates and aircraft electronics upset rates
 
 **Platform and Python Version Support:**
 - AniMAIRE has only been tested on Linux, but in theory, it should also work on Windows and Mac **when using the OTSO running mode**. (Magnetocosmics mode is Linux-only.)
-- **AniMAIRE, using the default OTSO mode, is CI-tested on Python 3.9 through 3.14.**
+- **AniMAIRE, using the default OTSO mode, is CI-tested on Python 3.10 through 3.14.**
 
 > **Note:** Previous versions of this README stated that AniMAIRE only works on Linux. In practice, OTSO mode should work on all platforms (Linux, Windows, Mac), but only Linux has been thoroughly tested. Magnetocosmics mode remains Linux-only.
 
