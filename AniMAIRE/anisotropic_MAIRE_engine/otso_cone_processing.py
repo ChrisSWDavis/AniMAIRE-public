@@ -167,19 +167,18 @@ def create_and_convert_cone(array_of_lats_and_longs:list[list[float,float]],
         # Calculate the cone of asymptotic directions
         cone_result, rigidity_result, run_information = OTSO.cone(
             customlocations=grid_points,
-            corenum=corenum,
-            startrigidity=max_rigidity,
-            endrigidity=min_rigidity,
-            rigiditystep=rigidity_step,
-            kp=KpIndex,
-            year=dateAndTime.year,
-            month=dateAndTime.month,
-            day=dateAndTime.day,
-            hour=dateAndTime.hour,
-            minute=dateAndTime.minute,
-            second=dateAndTime.second,
-            zenith=zenith,
-            azimuth=azimuth,
+            computation_params={"corenum":corenum},
+            rigidity_params={"startrigidity": max_rigidity,
+            "endrigidity": min_rigidity,
+            "rigiditystep": rigidity_step},
+            geomagnetic={"kp": KpIndex},
+            datetime_params={"year": dateAndTime.year,
+            "month": dateAndTime.month,
+            "day": dateAndTime.day,
+            "hour": dateAndTime.hour,
+            "minute": dateAndTime.minute,
+            "second": dateAndTime.second},
+            particle_params={"zenith": zenith, "azimuth": azimuth},
             **kwargs
         )
 
@@ -212,7 +211,7 @@ def create_and_convert_full_cone(array_of_lats_and_longs:list[list[float,float]]
                             minRigValue = 0.1,
                             nIncrements_high = 60,
                             nIncrements_low = 200,
-                            corenum=psutil.cpu_count(logical=False) - 2, 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 2) - 2), 
                            **kwargs):
     
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)

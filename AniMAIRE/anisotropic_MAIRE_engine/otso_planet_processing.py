@@ -136,24 +136,38 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         # Calculate asymptotic directions using OTSO.planet
         # Set default externalmag if not provided in kwargs
         if 'externalmag' not in kwargs:
-            kwargs['externalmag'] = "TSY89_BOBERG"
+            kwargs['externalmag'] = "TSY89c"
+
+        if 'boberg' not in kwargs:
+            kwargs['boberg'] = True
+            kwargs['bobergtype'] = "EXTENSION"
+
+        extern=kwargs['externalmag']
+        boberg=kwargs['boberg']
+        bobergtype=kwargs['bobergtype']
+
+        kwargs.pop('externalmag', None)
+        kwargs.pop('boberg', None)
+        kwargs.pop('bobergtype', None)
             
         planet_result = OTSO.planet(
-            array_of_lats_and_longs=array_of_lats_and_longs,
-            corenum=corenum,
-            asymptotic="YES",
-            asymlevels=energy_levels_GeV,
-            kp=kpIndex,
-            year=dateAndTime.year,
-            month=dateAndTime.month,
-            day=dateAndTime.day,
-            hour=dateAndTime.hour,
-            minute=dateAndTime.minute,
-            second=dateAndTime.second,
-            zenith=zenith,
-            azimuth=azimuth,
+            grid_params={"array_of_lats_and_longs": array_of_lats_and_longs},
+            computation_params={"corenum": corenum},
+            asymptotic_params={"asymptotic": "YES", "asymlevels": energy_levels_GeV},
+            magfield_params={"model": extern, "boberg": boberg, "bobergtype": bobergtype},
+            geomagnetic={"kp": kpIndex},
+            datetime_params={"year": dateAndTime.year, 
+                             "month": dateAndTime.month, 
+                             "day": dateAndTime.day, 
+                             "hour": dateAndTime.hour, 
+                             "minute": dateAndTime.minute, 
+                             "second": dateAndTime.second},
+            particle_params={"zenith": zenith, "azimuth": azimuth},
+            integration_params={"gyropercent": 15, "betaerror": 0.01},
             **kwargs
         )
+
+        print(planet_result[0])
         
         # Convert the result to a DataFrame
         result_df = convert_planet_df_to_asymp_format(planet_result)
@@ -181,7 +195,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             minRigValue=0.1,
                             nIncrements_high=60,
                             nIncrements_low=200,
-                            corenum=psutil.cpu_count(logical=False) - 2, 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 2) - 2),
                             **kwargs):
     """
     Calculate asymptotic directions for a wide range of rigidities by combining high and low rigidity ranges.
@@ -223,7 +237,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
     pd.DataFrame
         Combined DataFrame containing asymptotic directions for both high and low rigidity ranges
     """
-    
+
     print(f"Using {corenum} cores for OTSO.planet calculation")
     
     # Calculate step sizes for high and low rigidity ranges

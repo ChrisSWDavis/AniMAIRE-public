@@ -1,0 +1,48 @@
+# Keep CITATION.cff in sync with [project].version in pyproject.toml.
+# When the version changes, also sets date-released (UTC date) to match the release prep merge.
+
+name: Sync CITATION.cff
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-citation-cff-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # Avoid loops if another automation pushes as a different bot identity; standard GITHUB_TOKEN pushes as github-actions[bot].
+    if: github.actor != 'github-actions[bot]'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync version and date-released
+        run: python .github/scripts/sync_citation_cff.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- CITATION.cff; then
+            echo "No CITATION.cff changes."
+            exit 0
+          fi
+          git add CITATION.cff
+          git commit -m "chore: sync CITATION.cff with pyproject.toml version"
+          git push

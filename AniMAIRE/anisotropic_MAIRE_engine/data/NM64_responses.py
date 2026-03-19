@@ -1,6 +1,6 @@
+import importlib.resources
 import numpy as np
 import pandas as pd
-import pkg_resources
 import ParticleRigidityCalculationTools as PRCT
 from numba import njit
 from metpy.constants import g
@@ -8,12 +8,20 @@ from metpy.calc import height_to_pressure_std
 from metpy.units import units
 
 
-NM64_proton_response = pd.read_csv(pkg_resources.resource_filename(__name__,'NM64_proton_response.csv'), 
-                                    header=None)
+def _resource_path(filename: str):
+    """Return a path to a package data file (importlib.resources replacement for pkg_resources.resource_filename)."""
+    # Resources live in the same package as this module (the 'data' package), not in the module itself.
+    package = __name__.rsplit(".", 1)[0]
+    ref = importlib.resources.files(package) / filename
+    return importlib.resources.as_file(ref)
+
+
+with _resource_path("NM64_proton_response.csv") as path:
+    NM64_proton_response = pd.read_csv(path, header=None)
 NM64_proton_response.columns = ["proton_rigidity_GV","cts_per_primary_per_cm2"]
 
-NM64_proton_filepath_tabulated_2013 = pkg_resources.resource_filename(__name__,'NM64_proton_response_tabulated_2013.csv')
-NM64_proton_response_tabulated_2013_epn = pd.read_csv(NM64_proton_filepath_tabulated_2013,header=None)
+with _resource_path("NM64_proton_response_tabulated_2013.csv") as path:
+    NM64_proton_response_tabulated_2013_epn = pd.read_csv(path, header=None)
 NM64_proton_response_tabulated_2013_epn.columns = ["Energy_per_nucleon_GeV_per_n","Yield_arb_units"]
 NM64_proton_response_tabulated_2013_epn["Yield_per_m2_per_sr"] = NM64_proton_response_tabulated_2013_epn["Yield_arb_units"] * 0.109
 NM64_proton_response_tabulated_2013 = PRCT.convertParticleEnergySpecToRigiditySpec(particleKineticEnergyInMeV=NM64_proton_response_tabulated_2013_epn["Energy_per_nucleon_GeV_per_n"]*1000,
@@ -21,8 +29,8 @@ NM64_proton_response_tabulated_2013 = PRCT.convertParticleEnergySpecToRigiditySp
                                              particleMassAU=1,
                                              particleChargeAU=1)
 
-NM64_alpha_filepath_tabulated_2013 = pkg_resources.resource_filename(__name__,'NM64_alpha_response_tabulated_2013.csv')
-NM64_alpha_response_tabulated_2013_epn = pd.read_csv(NM64_alpha_filepath_tabulated_2013,header=None)
+with _resource_path("NM64_alpha_response_tabulated_2013.csv") as path:
+    NM64_alpha_response_tabulated_2013_epn = pd.read_csv(path, header=None)
 NM64_alpha_response_tabulated_2013_epn.columns = ["Energy_per_nucleon_GeV_per_n","Yield_arb_units"]
 NM64_alpha_response_tabulated_2013_epn["Yield_per_m2_per_sr"] = NM64_alpha_response_tabulated_2013_epn["Yield_arb_units"] * 8.37e-2 * 4 #need to multiply by 4 because at the moment its in per nucleon
 NM64_alpha_response_tabulated_2013 = PRCT.convertParticleEnergySpecToRigiditySpec(particleKineticEnergyInMeV=NM64_alpha_response_tabulated_2013_epn["Energy_per_nucleon_GeV_per_n"]*1000*4,
@@ -32,8 +40,8 @@ NM64_alpha_response_tabulated_2013 = PRCT.convertParticleEnergySpecToRigiditySpe
 
 # 2020 response values and the response function below are taken from https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2019JA027433
 
-NM64_alpha_filepath_tabulated_2020 = pkg_resources.resource_filename(__name__,'NM64_alpha_response_tabulated_2020.csv')
-NM64_alpha_response_tabulated_2020_epn = pd.read_csv(NM64_alpha_filepath_tabulated_2020,header=None)
+with _resource_path("NM64_alpha_response_tabulated_2020.csv") as path:
+    NM64_alpha_response_tabulated_2020_epn = pd.read_csv(path, header=None)
 NM64_alpha_response_tabulated_2020_epn.columns = ["Energy_per_nucleon_GeV_per_n","Yield_arb_units"]
 NM64_alpha_response_tabulated_2020_epn["Yield_per_m2_per_sr"] = NM64_alpha_response_tabulated_2020_epn["Yield_arb_units"] * 4 #need to multiply by 4 because at the moment its in per nucleon
 NM64_alpha_response_tabulated_2020 = PRCT.convertParticleEnergySpecToRigiditySpec(particleKineticEnergyInMeV=NM64_alpha_response_tabulated_2020_epn["Energy_per_nucleon_GeV_per_n"]*1000*4,

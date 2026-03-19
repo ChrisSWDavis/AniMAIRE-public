@@ -93,12 +93,12 @@ class NeutronMonitor:
         cutoff_rigidities = OTSO.cutoff(
             Stations=[],
             customlocations=[[self.name, self.latitude, self.longitude]],
-            year=datetime.year, 
-            month=datetime.month, 
-            day=datetime.day, 
-            hour=datetime.hour, 
-            minute=datetime.minute,
-            kp=kp_index
+            datetime_params={"year": datetime.year, 
+                             "month": datetime.month,
+                             "day": datetime.day,
+                             "hour":datetime.day,
+                             "minute": datetime.day},
+            geomagnetic={"kp": kp_index}
         )[0]
         cutoff_rigidity = cutoff_rigidities.loc[cutoff_type].values[0]
         
