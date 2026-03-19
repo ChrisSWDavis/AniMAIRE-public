@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "wheel"]
+build-backend = "hatchling.build"
 
 [project]
 name = "AniMAIRE"
@@ -76,8 +76,7 @@ dependencies = [
     "OTSO>1.2.3,<=1.2.4",
     "geopy>=2.0.0",
     "pynverse>=0.1.4.6",
-    "xgboost>=1.6.0,<4",
-    "setuptools>=59.6.0,<70",
+    "xgboost>=1.6.0,<4"
 ]
 
 [project.optional-dependencies]
@@ -86,11 +85,15 @@ test = ["pytest"]
 [project.urls]
 Homepage = "https://github.com/ssc-maire/AniMAIRE-public"
 
-[tool.setuptools.packages.find]
-exclude = ["pytests*"]
+[tool.hatch.build.targets.wheel]
+packages = ["AniMAIRE"]
+include = [
+    "AniMAIRE/anisotropic_MAIRE_engine/data/*.csv",
+    "AniMAIRE/anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl",
+]
 
-[tool.setuptools.package-data]
-AniMAIRE = [
-    "anisotropic_MAIRE_engine/data/*.csv",
-    "anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl",
+[tool.hatch.build.targets.sdist]
+include = [
+    "AniMAIRE/anisotropic_MAIRE_engine/data/*.csv",
+    "AniMAIRE/anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl",
 ]
