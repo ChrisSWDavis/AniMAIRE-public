@@ -41,8 +41,9 @@ class singleParticleEngineInstance:
         print("Acquiring pitch angle distributions...")
         pitchAngleDistToUse = self.particle_distribution.momentum_distribution.pitch_angle_distribution
         try:
-            print("IMF latitude set to", self.IMFlatitude)
-            print("IMF longitude set to", self.IMFlongitude)
+            # Avoid logging potentially sensitive IMF direction values in clear text
+            print("IMF latitude has been set.")
+            print("IMF longitude has been set.")
         except AttributeError:
             self.IMFlatitude = -1000.0 # distribution is probably isotropic: while a better solution is probably necessary, set to dummy variables for now.
             self.IMFlongitude = -1000.0
