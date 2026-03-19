@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AniMAIRE"
+version = "1.5.0"
+description = "Python library for running the anisotropic version of MAIRE+"
+readme = "README.md"
+license = { text = "CC By-NC-SA 4.0" }
+authors = [
+    { name = "Space Environment and Protection Group, University of Surrey" },
+]
+keywords = [
+    "anisotropic",
+    "MAIRE+",
+    "atmospheric",
+    "ionizing",
+    "radiation",
+    "dose",
+    "rates",
+    "cosmic",
+    "rays",
+    "ground",
+    "level",
+    "enhancements",
+    "GLEs",
+    "protons",
+    "alpha",
+    "particles",
+    "neutrons",
+    "effective",
+    "ambient",
+    "equivalent",
+    "aircraft",
+    "aviation",
+    "Earth",
+    "solar",
+    "system",
+    "sun",
+    "space",
+    "magnetic",
+    "field",
+]
+dependencies = [
+    "numpy>=1.21.6",
+    "pandarallel>=1.6.3",
+    "pandas>=1.3.5",
+    "ParticleRigidityCalculationTools>=1.5.4",
+    "scipy>=1.7.3",
+    "spacepy>=0.3.0",
+    "tqdm>=4.65.0",
+    "plotly>=5.9.0",
+    "numba>=0.57.1",
+    "metpy>=1.5.1",
+    "CosRayModifiedISO>=1.2.9",
+    "AsympDirsCalculator>=1.0.8",
+    "seaborn>=0.13.2",
+    "geopandas>=0.11.1",
+    "joblib>=1.2.0",
+    "spaceweather>=0.2.4",
+    "atmosphericRadiationDoseAndFlux>=1.0.3",
+    "kpindex>=2.0.0",
+    "ipywidgets>=8.1.5",
+    "dask>=2022.0.0",
+    "pyarrow>=12.0.0",
+    "matplotlib>=3.10.1",
+    "cartopy>=0.22.0",
+    "netCDF4>=1.7.2",
+    "imageio>=2.37.0",
+    "psutil>=7.0.0",
+    "OTSO>1.2.3,<=1.2.4",
+    "geopy>=2.0.0",
+    "pynverse>=0.1.4.6",
+    "xgboost>=1.6.0",
+    "setuptools>=59.6.0,<70",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/ssc-maire/AniMAIRE-public"
+
+[tool.setuptools.packages.find]
+exclude = ["pytests*"]
+
+[tool.setuptools.package-data]
+AniMAIRE = [
+    "anisotropic_MAIRE_engine/data/*.csv",
+    "anisotropic_MAIRE_engine/rigidityPredictor/data/*.pkl",
+]
