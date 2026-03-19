@@ -286,7 +286,7 @@ def getCountRatesAndDoses(simulatedGCRDF,simulatedGLEDF,relevantTimestamp):
         simulatedDoseRateSeries = 100 * ((GLEsimulatedDoseRateSeries/GCRsimulatedDoseRateSeries))
         if len(simulatedDoseRateSeries) == 0:
             print(simulatedDoseRateSeries)
-            print(latitude,longitude)
+            print("No simulated dose rate series found for the current row.")
 
         #print(simulatedDoseRateSeries)
         
