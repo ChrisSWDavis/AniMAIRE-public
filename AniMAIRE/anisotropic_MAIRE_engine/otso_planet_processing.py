@@ -195,7 +195,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
                             minRigValue=0.1,
                             nIncrements_high=60,
                             nIncrements_low=200,
-                            corenum=psutil.cpu_count(logical=False) - 2, 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 2) - 2),
                             **kwargs):
     """
     Calculate asymptotic directions for a wide range of rigidities by combining high and low rigidity ranges.
@@ -237,7 +237,7 @@ def create_and_convert_full_planet(array_of_lats_and_longs:list[list[float,float
     pd.DataFrame
         Combined DataFrame containing asymptotic directions for both high and low rigidity ranges
     """
-    
+
     print(f"Using {corenum} cores for OTSO.planet calculation")
     
     # Calculate step sizes for high and low rigidity ranges

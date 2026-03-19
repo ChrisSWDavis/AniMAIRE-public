@@ -211,7 +211,7 @@ def create_and_convert_full_cone(array_of_lats_and_longs:list[list[float,float]]
                             minRigValue = 0.1,
                             nIncrements_high = 60,
                             nIncrements_low = 200,
-                            corenum=psutil.cpu_count(logical=False) - 2, 
+                            corenum=max(1, (psutil.cpu_count(logical=False) or 2) - 2), 
                            **kwargs):
     
     high_rigidity_step = (highestMaxRigValue - maxRigValue) / (nIncrements_high - 1)
