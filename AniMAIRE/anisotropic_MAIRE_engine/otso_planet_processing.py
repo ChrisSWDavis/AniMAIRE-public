@@ -166,6 +166,8 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
             integration_params={"gyropercent": 15, "betaerror": 0.01},
             **kwargs
         )
+
+        print(planet_result[0])
         
         # Convert the result to a DataFrame
         result_df = convert_planet_df_to_asymp_format(planet_result)
