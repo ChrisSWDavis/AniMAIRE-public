@@ -134,7 +134,11 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
         zenith, azimuth = zenith_azimuth
         
         # Calculate asymptotic directions using OTSO.planet
-        # Set default externalmag if not provided in kwargs
+        # Set default internalmag and externalmag if not provided in kwargs
+
+        if 'internalmag' not in kwargs:
+            kwargs['internalmag'] = "IGRF"
+
         if 'externalmag' not in kwargs:
             kwargs['externalmag'] = "TSY89c"
 
@@ -142,10 +146,13 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
             kwargs['boberg'] = True
             kwargs['bobergtype'] = "EXTENSION"
 
+        intern=kwargs['internalmag']
         extern=kwargs['externalmag']
+        
         boberg=kwargs['boberg']
         bobergtype=kwargs['bobergtype']
 
+        kwargs.pop('internalmag', None)
         kwargs.pop('externalmag', None)
         kwargs.pop('boberg', None)
         kwargs.pop('bobergtype', None)
@@ -154,7 +161,7 @@ def create_and_convert_planet(array_of_lats_and_longs:list[list[float,float]],
             grid_params={"array_of_lats_and_longs": array_of_lats_and_longs},
             computation_params={"corenum": corenum},
             asymptotic_params={"asymptotic": "YES", "asymlevels": energy_levels_GeV},
-            magfield_params={"model": extern, "boberg": boberg, "bobergtype": bobergtype},
+            magfield_params={"internalmag":intern,"externalmag": extern, "boberg": boberg, "bobergtype": bobergtype},
             geomagnetic={"kp": kpIndex},
             datetime_params={"year": dateAndTime.year, 
                              "month": dateAndTime.month, 

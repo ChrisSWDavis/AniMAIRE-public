@@ -9,6 +9,7 @@ import psutil
 # NOTE: This file is now deprecated but could be reused in the future.
 # It contains functionality for processing OTSO cone output into asymptotic direction dataframes.
 # The new functionality is in otso_planet_processing.py and uses the OTSO.planet() function.
+# This file is also for an older version of OTSO, so changes will have to be made to the OTSO.cone() function to be compatible with the new version, if anyone wishes to access this functionality.
 
 def convert_to_asymp_df(cone_output: list[pd.DataFrame, pd.DataFrame]) -> pd.DataFrame:
     """
