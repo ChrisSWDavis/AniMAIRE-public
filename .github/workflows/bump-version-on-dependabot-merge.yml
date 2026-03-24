@@ -1,0 +1,70 @@
+name: Bump version on Dependabot merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: bump-version-on-dependabot-merge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bump patch version in pyproject.toml
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          pyproject_path = Path("pyproject.toml")
+          text = pyproject_path.read_text(encoding="utf-8")
+
+          # Match the [project] block version field only.
+          pattern = re.compile(
+              r"(?ms)(^\[project\]\n.*?^version\s*=\s*\")(\d+)\.(\d+)\.(\d+)(\".*?$)"
+          )
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          major, minor, patch = map(int, match.group(2, 3, 4))
+          new_version = f"{major}.{minor}.{patch + 1}"
+          updated = pattern.sub(
+              rf"\g<1>{new_version}\5",
+              text,
+              count=1,
+          )
+          pyproject_path.write_text(updated, encoding="utf-8")
+          print(f"Bumped version: {major}.{minor}.{patch} -> {new_version}")
+          PY
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- pyproject.toml; then
+            echo "No version changes detected."
+            exit 0
+          fi
+          git add pyproject.toml
+          git commit -m "chore: bump patch version after Dependabot merge"
+          git push
