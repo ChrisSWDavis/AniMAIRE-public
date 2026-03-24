@@ -35,10 +35,10 @@ A Python toolkit for calculating dose rates and aircraft electronics upset rates
   - [Larsen, N. et al. (2024). A New Open-Source Geomagnetosphere Propagation Tool (OTSO) and Its Applications.](https://doi.org/10.1029/2022JA031061)
 
 **Platform and Python Version Support:**
-- AniMAIRE has only been tested on Linux, but in theory, it should also work on Windows and Mac **when using the OTSO running mode**. (Magnetocosmics mode is Linux-only.)
-- **AniMAIRE, using the default OTSO mode, is CI-tested on Python 3.10 through 3.14.**
+- **AniMAIRE, using the default OTSO mode, is CI-tested on Linux, Windows, and Mac (macOS) across Python 3.10 through 3.14.**
+- Magnetocosmics mode remains Linux-only.
 
-> **Note:** Previous versions of this README stated that AniMAIRE only works on Linux. In practice, OTSO mode should work on all platforms (Linux, Windows, Mac), but only Linux has been thoroughly tested. Magnetocosmics mode remains Linux-only.
+> **Note:** Previous versions of this README stated that AniMAIRE only works on Linux. This has now been updated: OTSO mode is CI-tested on Linux, Windows, and Mac. Magnetocosmics mode remains Linux-only.
 
 You can use AniMAIRE to produce dose rate data and maps throughout large space weather events and plot them like this:
 
