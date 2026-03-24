@@ -1,3 +1,0 @@
-# Canonical dependency list: pyproject.toml [project.dependencies]
-# Editable install pulls those deps automatically.
--e .[test]

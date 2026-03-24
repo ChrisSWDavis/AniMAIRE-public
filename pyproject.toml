@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AniMAIRE"
-version = "1.5.3"
+version = "1.5.4"
 description = "Python library for running the anisotropic version of MAIRE+"
 readme = "README.md"
 license = { text = "CC By-NC-SA 4.0" }
@@ -80,7 +80,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["pytests"]
+
+[tool.coverage.run]
+source = ["AniMAIRE"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
 
 [project.urls]
 Homepage = "https://github.com/ssc-maire/AniMAIRE-public"
