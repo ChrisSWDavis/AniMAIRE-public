@@ -8,6 +8,9 @@ on:
     branches: [main]
     paths:
       - pyproject.toml
+  workflow_run:
+    workflows: ["Bump version on Dependabot merge"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,13 +23,27 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Avoid loops if another automation pushes as a different bot identity; standard GITHUB_TOKEN pushes as github-actions[bot].
-    if: github.actor != 'github-actions[bot]'
+    if: >
+      (
+        github.event_name == 'push' &&
+        github.actor != 'github-actions[bot]'
+      ) ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
 
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_run'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-python@v5
         with:

@@ -11,17 +11,33 @@ name: Upload Python Package
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Sync CITATION.cff"]
+    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   deploy:
+    if: >
+      github.event_name == 'release' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'workflow_run'
+      )
 
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+      if: github.event_name == 'release'
+    - uses: actions/checkout@v4
+      if: github.event_name == 'workflow_run'
+      with:
+        ref: ${{ github.event.workflow_run.head_sha }}
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
